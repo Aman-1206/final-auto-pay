@@ -1,5 +1,6 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
+import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
 import { ensureStoredDueWorkbook } from "@/lib/workbook-sync";
@@ -22,6 +23,8 @@ export default async function DuesPage({
     <DashboardShell
       title="Dues upload workspace"
       description="Upload your latest dues sheet, keep it in sync with master contacts, then choose when to generate and send reminders."
+      companyName={user.companyName}
+      userName={user.name}
     >
       <StatusBar params={params} />
 
@@ -94,9 +97,9 @@ export default async function DuesPage({
               </p>
 
               <div className="button-row">
-                <a className="button" href="/dashboard/dispatch">
+                <Link className="button" href="/dashboard/dispatch">
                   Open dispatch center
-                </a>
+                </Link>
               </div>
             </div>
           )}

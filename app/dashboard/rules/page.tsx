@@ -19,6 +19,8 @@ export default async function RulesPage({
     <DashboardShell
       title="Reminder rules and templates"
       description="Choose how many days before due date you want to notify clients and edit every message template."
+      companyName={user.companyName}
+      userName={user.name}
     >
       <StatusBar params={params} />
 

@@ -7,34 +7,72 @@ export default function LoginPage({
 }) {
   return (
     <main className="auth-shell">
-      <section className="auth-panel glass-panel">
-        <p className="eyebrow">Welcome back</p>
-        <h1>Access your reminder dashboard</h1>
-        <p className="hero-copy">
-          Upload the latest dues file, review the reminder queue, and send from one place.
-        </p>
+      <section className="auth-layout">
+        <aside className="auth-showcase">
+          <Link href="/" className="brand-lockup">
+            <span className="brand-mark" />
+            <span className="brand-text">
+              <span className="brand-title">Auto Payment Reminder</span>
+              <span className="brand-subtitle">Finance workflow platform</span>
+            </span>
+          </Link>
 
-        <StatusBanner searchParams={searchParams} />
+          <div className="auth-showcase-content">
+            <p className="eyebrow">Welcome back</p>
+            <h1>Step into a cleaner reminder control room.</h1>
+            <p>
+              Review dues, manage templates, and send with confidence from the same workspace your
+              team already knows.
+            </p>
 
-        <form action="/api/auth/login" method="post" className="form-stack">
-          <label className="field">
-            <span>Email</span>
-            <input name="email" type="email" placeholder="you@company.com" required />
-          </label>
+            <div className="auth-stat-grid">
+              <div className="auth-stat-card">
+                <strong>1</strong>
+                <span>dashboard for dues, rules, and dispatch</span>
+              </div>
+              <div className="auth-stat-card">
+                <strong>3</strong>
+                <span>channels supported across reminders</span>
+              </div>
+            </div>
 
-          <label className="field">
-            <span>Password</span>
-            <input name="password" type="password" required />
-          </label>
+            <div className="auth-bullet-list">
+              <span>Upload master contacts and dues without changing your team workflow.</span>
+              <span>Generate reminders from day-based rules before going live.</span>
+              <span>Use simulate mode while checking templates and provider settings.</span>
+            </div>
+          </div>
+        </aside>
 
-          <button className="button full-width" type="submit">
-            Login
-          </button>
-        </form>
+        <section className="auth-panel">
+          <p className="eyebrow">Login</p>
+          <h2>Access your reminder dashboard</h2>
+          <p className="hero-copy">
+            Use the same workspace to keep invoices, contacts, rules, and queue activity in sync.
+          </p>
 
-        <p className="muted-copy">
-          New here? <Link href="/signup">Create an account</Link>.
-        </p>
+          <StatusBanner searchParams={searchParams} />
+
+          <form action="/api/auth/login" method="post" className="form-stack">
+            <label className="field">
+              <span>Email</span>
+              <input name="email" type="email" placeholder="you@company.com" required />
+            </label>
+
+            <label className="field">
+              <span>Password</span>
+              <input name="password" type="password" required />
+            </label>
+
+            <button className="button full-width" type="submit">
+              Login
+            </button>
+          </form>
+
+          <p className="muted-copy">
+            New here? <Link href="/signup">Create an account</Link>.
+          </p>
+        </section>
       </section>
     </main>
   );

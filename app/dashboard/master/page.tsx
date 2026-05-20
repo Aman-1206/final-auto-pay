@@ -22,6 +22,8 @@ export default async function MasterDatabasePage({
     <DashboardShell
       title="Master contact database"
       description="Upload your long-lived company contact sheet and keep payment contacts ready for matching."
+      companyName={user.companyName}
+      userName={user.name}
     >
       <StatusBar params={params} />
 

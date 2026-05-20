@@ -36,6 +36,8 @@ export default async function DispatchPage({
     <DashboardShell
       title="Dispatch center"
       description="Generate reminders only when you choose, review the day-based queue, and send it when you are ready."
+      companyName={user.companyName}
+      userName={user.name}
     >
       <section className="dispatch-shell">
         <StatusBar params={params} />

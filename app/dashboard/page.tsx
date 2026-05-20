@@ -29,6 +29,8 @@ export default async function DashboardOverview({
     <DashboardShell
       title="Reminder command center"
       description="Track your imported records, check upcoming dues, and see the latest reminder activity."
+      companyName={user.companyName}
+      userName={user.name}
     >
       <StatusBar params={params} />
 
