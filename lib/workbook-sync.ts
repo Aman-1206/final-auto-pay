@@ -4,6 +4,7 @@ import {
   readStoredWorkbookRows,
   writeStoredWorkbookRows
 } from "@/lib/excel";
+import { buildDueContactMatch } from "@/lib/contact-matching";
 import { readDatabase, updateDatabase } from "@/lib/storage";
 import type { DueRecord, MasterContact } from "@/lib/types";
 
@@ -46,7 +47,7 @@ function rowHasManagedHeaderDuplicates(
 }
 
 const masterManagedHeaders = [
-  "Customer Code",
+  "Dealer Code",
   "Company Name",
   "Contact Person",
   "Email",
@@ -55,18 +56,20 @@ const masterManagedHeaders = [
 ];
 
 const dueManagedHeaders = [
-  "Customer Code",
-  "Company Name",
-  "Invoice Number",
-  "Invoice Date",
-  "Due Date",
-  "Amount",
+  "Date",
+  "Ref. No.",
+  "Party's Name",
+  "Opening Amount",
+  "Pending Amount",
+  "Due on",
+  "Overdue by days",
+  "Dealer Code",
   "Currency"
 ];
 
 function buildMasterWorkbookRow(record: MasterContact) {
   return mergeRawWithCanonical(record.raw || {}, {
-    "Customer Code": record.customerCode,
+    "Dealer Code": record.dealerCode || record.customerCode,
     "Company Name": record.companyName,
     "Contact Person": record.primaryContact,
     Email: record.email,
@@ -77,12 +80,14 @@ function buildMasterWorkbookRow(record: MasterContact) {
 
 function buildDueWorkbookRow(record: DueRecord) {
   return mergeRawWithCanonical(record.raw || {}, {
-    "Customer Code": record.customerCode,
-    "Company Name": record.companyName,
-    "Invoice Number": record.invoiceNumber,
-    "Invoice Date": record.invoiceDate ? record.invoiceDate.slice(0, 10) : "",
-    "Due Date": record.dueDate ? record.dueDate.slice(0, 10) : "",
-    Amount: record.amount,
+    Date: (record.billDate || record.invoiceDate) ? (record.billDate || record.invoiceDate).slice(0, 10) : "",
+    "Ref. No.": record.invoiceNumber || record.reference,
+    "Party's Name": record.companyName,
+    "Opening Amount": record.openingAmount,
+    "Pending Amount": record.amount,
+    "Due on": record.dueDate ? record.dueDate.slice(0, 10) : "",
+    "Overdue by days": record.overdueDays,
+    "Dealer Code": record.dealerCode || record.customerCode,
     Currency: record.currency
   });
 }
@@ -162,6 +167,23 @@ export async function syncStoredMasterWorkbook(ownerId: string) {
   await updateDatabase((database) => {
     database.masterContacts = database.masterContacts.filter((entry) => entry.ownerId !== ownerId);
     database.masterContacts.push(...records);
+    database.dueRecords = database.dueRecords.map((entry) => {
+      if (entry.ownerId !== ownerId) {
+        return entry;
+      }
+
+      const match = buildDueContactMatch(entry, records);
+      return {
+        ...entry,
+        companyName: match.companyName,
+        matchedContactId: match.matchedContactId,
+        matchedContactName: match.matchedContactName,
+        matchedEmail: match.matchedEmail,
+        matchedWhatsapp: match.matchedWhatsapp,
+        matchedSms: match.matchedSms,
+        contactMatchStatus: match.contactMatchStatus
+      };
+    });
     database.reminderLogs = database.reminderLogs.filter(
       (entry) =>
         !(
@@ -178,11 +200,13 @@ export async function syncStoredMasterWorkbook(ownerId: string) {
 
 export async function syncStoredDueWorkbook(ownerId: string) {
   const { rows } = await readStoredWorkbookRows(ownerId, "due");
-  const records = mapDueRows(rows, ownerId);
+  const database = await readDatabase();
+  const contacts = database.masterContacts.filter((entry) => entry.ownerId === ownerId);
+  const records = mapDueRows(rows, ownerId, contacts);
 
   if (records.length === 0) {
     throw new Error(
-      "The stored due workbook no longer contains any valid rows. Please keep company name and due date values filled in."
+      "The stored due workbook no longer contains any valid rows. Please keep bill date filled in with either dealer code or party name."
     );
   }
 

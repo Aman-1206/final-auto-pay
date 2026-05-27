@@ -10,6 +10,14 @@ export function normalizeText(value: string) {
   return value.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+export function getDuePartyKey(input: {
+  dealerCode?: string;
+  customerCode?: string;
+  companyName?: string;
+}) {
+  return normalizeText(input.dealerCode || input.customerCode || input.companyName || "");
+}
+
 export function formatDate(value: string) {
   if (!value) {
     return "Not available";
@@ -34,18 +42,26 @@ export function daysBetween(fromDate: Date, toDate: Date) {
   return Math.round((end.getTime() - start.getTime()) / 86400000);
 }
 
-export function formatElapsedDaysTag(value: string, referenceDate = new Date()) {
+export function getBillAgeDays(value: string, referenceDate = new Date()) {
   if (!value) {
-    return "No invoice date";
+    return null;
   }
 
   const sourceDate = new Date(value);
 
   if (Number.isNaN(sourceDate.getTime())) {
-    return "No invoice date";
+    return null;
   }
 
-  const daysElapsed = daysBetween(sourceDate, referenceDate);
+  return daysBetween(sourceDate, referenceDate);
+}
+
+export function formatElapsedDaysTag(value: string, referenceDate = new Date()) {
+  const daysElapsed = getBillAgeDays(value, referenceDate);
+
+  if (daysElapsed === null) {
+    return "No invoice date";
+  }
 
   if (daysElapsed === 0) {
     return "Today";

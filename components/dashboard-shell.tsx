@@ -6,13 +6,15 @@ export function DashboardShell({
   title,
   description,
   companyName,
-  userName
+  userName,
+  isAdmin
 }: {
   children: ReactNode;
   title: string;
   description: string;
   companyName: string;
   userName: string;
+  isAdmin: boolean;
 }) {
   return (
     <DashboardClientShell
@@ -20,6 +22,7 @@ export function DashboardShell({
       description={description}
       companyName={companyName}
       userName={userName}
+      isAdmin={isAdmin}
     >
       {children}
     </DashboardClientShell>

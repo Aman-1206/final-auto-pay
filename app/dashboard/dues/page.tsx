@@ -1,7 +1,7 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
 import Link from "next/link";
-import { requireUser } from "@/lib/auth";
+import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
 import { ensureStoredDueWorkbook } from "@/lib/workbook-sync";
 import { formatCurrency, formatDate, formatElapsedDaysTag } from "@/lib/utils";
@@ -25,6 +25,7 @@ export default async function DuesPage({
       description="Upload your latest dues sheet, keep it in sync with master contacts, then choose when to generate and send reminders."
       companyName={user.companyName}
       userName={user.name}
+      isAdmin={isAdminUser(user)}
     >
       <StatusBar params={params} />
 
@@ -33,9 +34,10 @@ export default async function DuesPage({
           <div className="section-heading">
             <h2>Upload dues Excel</h2>
             <p>
-              Recommended headers: Customer Code, Company Name, Invoice Number, Invoice Date, Due
-              Date, Amount, Currency. Uploading updates the data only. Reminders are generated
-              later when you choose.
+              Recommended headers for your latest sheet: Date, Ref. No., Party&apos;s Name,
+              Opening Amount, Pending Amount, Due on, and Overdue by days. Dealer code is now
+              optional in dues imports, so party names can still be matched with the master
+              database when the code is missing.
             </p>
           </div>
 
@@ -79,7 +81,7 @@ export default async function DuesPage({
           <div className="section-heading">
             <h2>Next step after upload</h2>
             <p>
-              Generate reminders only for invoices that match your rule windows, then send the
+              Generate reminders only for invoices that match your bill-age rules, then send the
               queue after you review it.
             </p>
           </div>
@@ -115,26 +117,30 @@ export default async function DuesPage({
             <table>
               <thead>
                 <tr>
-                  <th>Customer code</th>
+                  <th>No.</th>
                   <th>Company</th>
                   <th>Invoice</th>
                   <th>Bill age</th>
+                  <th>Overdue</th>
+                  <th>Contact match</th>
                   <th>Due date</th>
-                  <th>Amount</th>
+                  <th>Pending</th>
                 </tr>
               </thead>
               <tbody>
                 {dueRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>Upload a dues file to preview the active records.</td>
+                    <td colSpan={8}>Upload a dues file to preview the active records.</td>
                   </tr>
                 ) : (
-                  dueRecords.slice(0, 20).map((due) => (
+                  dueRecords.slice(0, 20).map((due, index) => (
                     <tr key={due.id}>
-                      <td>{due.customerCode || "N/A"}</td>
+                      <td>{index + 1}</td>
                       <td>{due.companyName}</td>
-                      <td>{due.invoiceNumber || "N/A"}</td>
-                      <td>{formatElapsedDaysTag(due.invoiceDate)}</td>
+                      <td>{due.invoiceNumber || due.reference || "N/A"}</td>
+                      <td>{formatElapsedDaysTag(due.billDate || due.invoiceDate)}</td>
+                      <td>{due.overdueDays > 0 ? `${due.overdueDays} days` : "Current"}</td>
+                      <td>{due.contactMatchStatus === "matched" ? "Matched" : "Missing"}</td>
                       <td>{formatDate(due.dueDate)}</td>
                       <td>{formatCurrency(due.amount, due.currency)}</td>
                     </tr>

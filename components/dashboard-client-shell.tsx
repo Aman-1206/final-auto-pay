@@ -5,37 +5,42 @@ import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
-const navItems = [
-  { href: "/dashboard", label: "Overview" },
-  { href: "/dashboard/master", label: "Master Database" },
-  { href: "/dashboard/dues", label: "Dues Upload" },
-  { href: "/dashboard/rules", label: "Rules & Templates" },
-  { href: "/dashboard/dispatch", label: "Dispatch Center" }
-] as const satisfies ReadonlyArray<{ href: Route; label: string }>;
-
 export function DashboardClientShell({
   children,
   title,
   description,
   companyName,
-  userName
+  userName,
+  isAdmin
 }: {
   children: ReactNode;
   title: string;
   description: string;
   companyName: string;
   userName: string;
+  isAdmin: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const navItems: Array<{ href: Route; label: string }> = [
+    { href: "/dashboard", label: "Overview" },
+    { href: "/dashboard/master", label: "Master Database" },
+    { href: "/dashboard/dues", label: "Dues Upload" },
+    { href: "/dashboard/dispatch", label: "Dispatch Center" },
+    ...(isAdmin
+      ? ([
+          { href: "/dashboard/settings", label: "Admin Dashboard" }
+        ] satisfies Array<{ href: Route; label: string }>)
+      : [])
+  ];
 
   useEffect(() => {
     navItems.forEach((item) => {
       router.prefetch(item.href);
     });
-  }, [router]);
+  }, [isAdmin, router]);
 
   useEffect(() => {
     setPendingHref(null);

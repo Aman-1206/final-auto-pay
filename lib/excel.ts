@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
+import { buildDueContactMatch } from "@/lib/contact-matching";
 import type { DueRecord, MasterContact } from "@/lib/types";
 
 type RawRow = Record<string, string | number | boolean | Date | undefined>;
@@ -9,13 +10,13 @@ type ImportKind = "master" | "due";
 type WorkbookUpdateHandler = (rows: RawRow[]) => RawRow[] | Promise<RawRow[]>;
 
 type MasterRowLookup = {
-  customerCode: string;
+  dealerCode: string;
   companyName?: string;
   primaryContact?: string;
 };
 
 type MasterRowChanges = {
-  customerCode: string;
+  dealerCode: string;
   companyName: string;
   primaryContact: string;
   email: string;
@@ -26,20 +27,22 @@ type MasterRowChanges = {
 };
 
 type DueRowLookup = {
-  customerCode: string;
+  dealerCode: string;
   companyName?: string;
   invoiceNumber?: string;
-  dueDate?: string;
+  billDate?: string;
 };
 
 type DueRowChanges = {
-  customerCode: string;
+  dealerCode: string;
   companyName: string;
   invoiceNumber: string;
-  invoiceDate: string;
+  billDate: string;
   dueDate: string;
+  openingAmount: string;
   amount: string;
   currency: string;
+  overdueDays: string;
   reference: string;
   notes: string;
 };
@@ -50,12 +53,24 @@ const storedWorkbookFileNames: Record<ImportKind, string> = {
 };
 
 const masterFieldCandidates = {
-  customerCode: ["customer code", "customer id", "customer number", "code", "party code"],
+  dealerCode: [
+    "dealer code",
+    "dealer id",
+    "dealer number",
+    "customer code",
+    "customer id",
+    "customer number",
+    "party code",
+    "code"
+  ],
   companyName: [
     "company name",
     "company",
+    "dealer name",
     "client name",
     "customer name",
+    "party s name",
+    "party name",
     "party name",
     "name of company",
     "particulars",
@@ -96,31 +111,60 @@ const masterFieldCandidates = {
 } as const;
 
 const dueFieldCandidates = {
-  customerCode: ["customer code", "customer id", "customer number", "code", "party code"],
+  dealerCode: [
+    "dealer code",
+    "dealer id",
+    "dealer number",
+    "customer code",
+    "customer id",
+    "customer number",
+    "party code",
+    "code"
+  ],
   companyName: [
     "company name",
     "company",
+    "dealer name",
     "client name",
     "customer name",
+    "party s name",
     "party name",
     "name of company",
     "particulars",
     "particular"
   ],
   invoiceNumber: [
+    "bill no",
+    "bill number",
     "invoice no",
     "invoice no.",
     "invoice number",
-    "bill no",
+    "ref no",
+    "ref no.",
+    "reference no",
     "bill no.",
     "reference no",
     "reference no.",
     "invoice"
   ],
-  invoiceDate: ["invoice date", "invoice dt", "bill date", "bill dt"],
+  billDate: [
+    "bill date",
+    "bill dt",
+    "date",
+    "invoice date",
+    "invoice dt",
+    "document date",
+    "posting date"
+  ],
   dueDate: ["due date", "payment due date", "reminder date", "due dt", "due on"],
+  openingAmount: ["opening amount", "opening amt", "opening balance"],
   amount: [
+    "pending amount",
+    "pending amt",
     "amount",
+    "bill amount",
+    "bill value",
+    "net amount",
     "invoice amount",
     "due amount",
     "balance amount",
@@ -129,6 +173,7 @@ const dueFieldCandidates = {
     "pending amount"
   ],
   currency: ["currency"],
+  overdueDays: ["overdue by days", "overdue by day", "overdue days", "ageing days"],
   reference: ["reference", "reference number", "po number", "po no"],
   notes: ["notes", "remarks", "comment"]
 } as const;
@@ -200,6 +245,31 @@ function toDateValue(value: unknown) {
     }
   }
 
+  const monthNameMatch = text.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/);
+
+  if (monthNameMatch) {
+    const day = Number(monthNameMatch[1]);
+    const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(
+      monthNameMatch[2].toLowerCase()
+    );
+    const year = Number(
+      monthNameMatch[3].length === 2 ? `20${monthNameMatch[3]}` : monthNameMatch[3]
+    );
+
+    if (month >= 0) {
+      const parsed = new Date(Date.UTC(year, month, day));
+
+      if (
+        !Number.isNaN(parsed.getTime()) &&
+        parsed.getUTCFullYear() === year &&
+        parsed.getUTCMonth() === month &&
+        parsed.getUTCDate() === day
+      ) {
+        return parsed.toISOString();
+      }
+    }
+  }
+
   const direct = new Date(text);
   return Number.isNaN(direct.getTime()) ? "" : direct.toISOString();
 }
@@ -215,7 +285,8 @@ function toAmount(value: unknown) {
   }
 
   const text = toText(value).replace(/,/g, "");
-  const parsed = Number(text);
+  const numericText = text.match(/-?\d+(\.\d+)?/)?.[0] || "";
+  const parsed = Number(numericText);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -243,6 +314,28 @@ function normalizeRow(row: RawRow) {
   return Object.fromEntries(
     Object.entries(row).map(([key, value]) => [normalizeHeader(key), value])
   );
+}
+
+function expandGroupedDueRows(rows: RawRow[]) {
+  let activePartyName = "";
+
+  return rows.map((row) => {
+    const normalizedRow = normalizeRow(row);
+    const rowPartyName = toText(pickValue(normalizedRow, dueFieldCandidates.companyName));
+    const billDate = toDateValue(pickValue(normalizedRow, dueFieldCandidates.billDate));
+    const invoiceNumber = toText(pickValue(normalizedRow, dueFieldCandidates.invoiceNumber));
+
+    if (rowPartyName && !billDate && !invoiceNumber) {
+      activePartyName = rowPartyName;
+    }
+
+    if (!rowPartyName && activePartyName) {
+      const companyHeader = getExistingRowKey(row, dueFieldCandidates.companyName) || "Party's Name";
+      row[companyHeader] = activePartyName;
+    }
+
+    return row;
+  });
 }
 
 function pickValue(row: Record<string, unknown>, candidates: readonly string[]) {
@@ -303,7 +396,7 @@ function findUniqueRowIndex(
 
 function findMasterRowIndex(rows: RawRow[], lookup: MasterRowLookup) {
   const codeIndex = rows.findIndex((row) =>
-    matchesTextField(row, masterFieldCandidates.customerCode, lookup.customerCode)
+    matchesTextField(row, masterFieldCandidates.dealerCode, lookup.dealerCode)
   );
 
   if (codeIndex !== -1) {
@@ -329,9 +422,9 @@ function findMasterRowIndex(rows: RawRow[], lookup: MasterRowLookup) {
 function findDueRowIndex(rows: RawRow[], lookup: DueRowLookup) {
   const exactIndex = rows.findIndex(
     (row) =>
-      matchesTextField(row, dueFieldCandidates.customerCode, lookup.customerCode) &&
+      matchesTextField(row, dueFieldCandidates.dealerCode, lookup.dealerCode) &&
       matchesTextField(row, dueFieldCandidates.invoiceNumber, lookup.invoiceNumber || "") &&
-      matchesDateField(row, dueFieldCandidates.dueDate, lookup.dueDate || "")
+      matchesDateField(row, dueFieldCandidates.billDate, lookup.billDate || "")
   );
 
   if (exactIndex !== -1) {
@@ -340,14 +433,14 @@ function findDueRowIndex(rows: RawRow[], lookup: DueRowLookup) {
 
   const fallbackMatchers = [
     (row: RawRow) =>
-      matchesTextField(row, dueFieldCandidates.customerCode, lookup.customerCode) &&
+      matchesTextField(row, dueFieldCandidates.dealerCode, lookup.dealerCode) &&
       matchesTextField(row, dueFieldCandidates.invoiceNumber, lookup.invoiceNumber || ""),
     (row: RawRow) =>
-      matchesTextField(row, dueFieldCandidates.customerCode, lookup.customerCode) &&
-      matchesDateField(row, dueFieldCandidates.dueDate, lookup.dueDate || ""),
+      matchesTextField(row, dueFieldCandidates.dealerCode, lookup.dealerCode) &&
+      matchesDateField(row, dueFieldCandidates.billDate, lookup.billDate || ""),
     (row: RawRow) =>
       matchesTextField(row, dueFieldCandidates.invoiceNumber, lookup.invoiceNumber || "") &&
-      matchesDateField(row, dueFieldCandidates.dueDate, lookup.dueDate || ""),
+      matchesDateField(row, dueFieldCandidates.billDate, lookup.billDate || ""),
     (row: RawRow) =>
       matchesTextField(row, dueFieldCandidates.companyName, lookup.companyName || "") &&
       matchesTextField(row, dueFieldCandidates.invoiceNumber, lookup.invoiceNumber || ""),
@@ -355,7 +448,7 @@ function findDueRowIndex(rows: RawRow[], lookup: DueRowLookup) {
       matchesTextField(row, dueFieldCandidates.invoiceNumber, lookup.invoiceNumber || ""),
     (row: RawRow) =>
       matchesTextField(row, dueFieldCandidates.companyName, lookup.companyName || "") &&
-      matchesDateField(row, dueFieldCandidates.dueDate, lookup.dueDate || "")
+      matchesDateField(row, dueFieldCandidates.billDate, lookup.billDate || "")
   ];
 
   for (const matcher of fallbackMatchers) {
@@ -398,6 +491,50 @@ function detectHeaderRow(worksheet: XLSX.WorkSheet, kind: ImportKind) {
   return bestRowIndex;
 }
 
+function isNamedHeader(value: unknown) {
+  const text = toText(value);
+  if (!text) {
+    return false;
+  }
+
+  const normalized = normalizeHeader(text);
+  return normalized !== "" && normalized !== "unnamed";
+}
+
+function resolveHeaderValues(rows: unknown[][], headerRowIndex: number) {
+  const maxColumnCount = rows.reduce((max, row) => Math.max(max, row?.length || 0), 0);
+
+  return Array.from({ length: maxColumnCount }, (_, columnIndex) => {
+    const detectedHeader = rows[headerRowIndex]?.[columnIndex];
+    if (isNamedHeader(detectedHeader)) {
+      return toText(detectedHeader);
+    }
+
+    for (let rowIndex = headerRowIndex - 1; rowIndex >= 0; rowIndex -= 1) {
+      const candidate = rows[rowIndex]?.[columnIndex];
+      if (isNamedHeader(candidate)) {
+        return toText(candidate);
+      }
+    }
+
+    return `Unnamed: ${columnIndex}`;
+  });
+}
+
+function sheetToRows(worksheet: XLSX.WorkSheet, kind: ImportKind, headerRowIndex?: number) {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+    header: 1,
+    defval: "",
+    raw: true
+  });
+  const resolvedHeaderRowIndex = headerRowIndex ?? detectHeaderRow(worksheet, kind);
+  const headers = resolveHeaderValues(rows, resolvedHeaderRowIndex);
+
+  return rows.slice(resolvedHeaderRowIndex + 1).map((row) =>
+    Object.fromEntries(headers.map((header, index) => [header, row?.[index] ?? ""]))
+  );
+}
+
 export function parseWorkbook(buffer: Buffer, kind: ImportKind) {
   const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheetName = workbook.SheetNames[0];
@@ -408,12 +545,7 @@ export function parseWorkbook(buffer: Buffer, kind: ImportKind) {
   }
 
   const headerRowIndex = detectHeaderRow(worksheet, kind);
-
-  return XLSX.utils.sheet_to_json<RawRow>(worksheet, {
-    range: headerRowIndex,
-    defval: "",
-    raw: true
-  });
+  return sheetToRows(worksheet, kind, headerRowIndex) as RawRow[];
 }
 
 function getWorkbookDirectory(ownerId: string) {
@@ -522,11 +654,7 @@ export async function readStoredWorkbookRows(ownerId: string, kind: ImportKind) 
   });
   const { workbook, sheetName, worksheet } = readWorkbookOrThrow(buffer, kind);
   const headerRowIndex = detectHeaderRow(worksheet, kind);
-  const rows = XLSX.utils.sheet_to_json<RawRow>(worksheet, {
-    range: headerRowIndex,
-    defval: "",
-    raw: true
-  });
+  const rows = sheetToRows(worksheet, kind, headerRowIndex) as RawRow[];
 
   return {
     filePath,
@@ -579,9 +707,9 @@ function applyMasterRowChanges(row: RawRow, changes: MasterRowChanges) {
   let nextRow = { ...row };
   nextRow = setRowField(
     nextRow,
-    masterFieldCandidates.customerCode,
-    "Customer Code",
-    changes.customerCode
+    masterFieldCandidates.dealerCode,
+    "Dealer Code",
+    changes.dealerCode
   );
   nextRow = setRowField(
     nextRow,
@@ -619,16 +747,16 @@ export async function saveStoredMasterWorkbookRows(
     const nextRows = [...rows];
 
     entries.forEach((entry, index) => {
-      if (!entry.changes.customerCode.trim() || !entry.changes.companyName.trim()) {
-        throw new Error(`Row ${index + 1} must include both customer code and company name.`);
+      if (!entry.changes.dealerCode.trim() || !entry.changes.companyName.trim()) {
+        throw new Error(`Row ${index + 1} must include both dealer code and company name.`);
       }
 
-      if (entry.lookup?.customerCode?.trim()) {
+      if (entry.lookup?.dealerCode?.trim()) {
         const rowIndex = findMasterRowIndex(nextRows, entry.lookup);
 
         if (rowIndex === -1) {
           throw new Error(
-            `The stored master row for ${entry.lookup.customerCode} could not be found.`
+            `The stored master row for ${entry.lookup.dealerCode} could not be found.`
           );
         }
 
@@ -665,9 +793,9 @@ function applyDueRowChanges(row: RawRow, changes: DueRowChanges) {
   let nextRow = { ...row };
   nextRow = setRowField(
     nextRow,
-    dueFieldCandidates.customerCode,
-    "Customer Code",
-    changes.customerCode
+    dueFieldCandidates.dealerCode,
+    "Dealer Code",
+    changes.dealerCode
   );
   nextRow = setRowField(
     nextRow,
@@ -683,13 +811,25 @@ function applyDueRowChanges(row: RawRow, changes: DueRowChanges) {
   );
   nextRow = setRowField(
     nextRow,
-    dueFieldCandidates.invoiceDate,
-    "Invoice Date",
-    changes.invoiceDate
+    dueFieldCandidates.billDate,
+    "Bill Date",
+    changes.billDate
   );
   nextRow = setRowField(nextRow, dueFieldCandidates.dueDate, "Due Date", changes.dueDate);
-  nextRow = setRowField(nextRow, dueFieldCandidates.amount, "Amount", changes.amount);
+  nextRow = setRowField(
+    nextRow,
+    dueFieldCandidates.openingAmount,
+    "Opening Amount",
+    changes.openingAmount
+  );
+  nextRow = setRowField(nextRow, dueFieldCandidates.amount, "Pending Amount", changes.amount);
   nextRow = setRowField(nextRow, dueFieldCandidates.currency, "Currency", changes.currency);
+  nextRow = setRowField(
+    nextRow,
+    dueFieldCandidates.overdueDays,
+    "Overdue by days",
+    changes.overdueDays
+  );
   nextRow = setRowField(nextRow, dueFieldCandidates.reference, "Reference", changes.reference);
   nextRow = setRowField(nextRow, dueFieldCandidates.notes, "Notes", changes.notes);
   return nextRow;
@@ -707,21 +847,18 @@ export async function saveStoredDueWorkbookRows(
 
     entries.forEach((entry, index) => {
       if (
-        !entry.changes.customerCode.trim() ||
-        !entry.changes.companyName.trim() ||
-        !entry.changes.dueDate.trim()
+        (!entry.changes.dealerCode.trim() && !entry.changes.companyName.trim()) ||
+        !entry.changes.billDate.trim()
       ) {
-        throw new Error(
-          `Row ${index + 1} must include customer code, company name, and due date.`
-        );
+        throw new Error(`Row ${index + 1} must include a dealer code or company name, plus bill date.`);
       }
 
-      if (entry.lookup?.customerCode?.trim()) {
+      if (entry.lookup?.dealerCode?.trim()) {
         const rowIndex = findDueRowIndex(nextRows, entry.lookup);
 
         if (rowIndex === -1) {
           throw new Error(
-            `The stored workbook row for customer ${entry.lookup.customerCode} could not be found.`
+            `The stored workbook row for dealer ${entry.lookup.dealerCode} could not be found.`
           );
         }
 
@@ -736,6 +873,21 @@ export async function saveStoredDueWorkbookRows(
   });
 }
 
+function matchMasterContactByDealerCode(
+  dealerCode: string,
+  contacts: MasterContact[]
+) {
+  if (!dealerCode.trim()) {
+    return null;
+  }
+
+  const normalizedDealerCode = normalizeHeader(dealerCode);
+  return (
+    contacts.find((contact) => normalizeHeader(contact.dealerCode || contact.customerCode) === normalizedDealerCode) ??
+    null
+  );
+}
+
 export function mapMasterRows(rows: RawRow[], ownerId: string) {
   const importedAt = new Date().toISOString();
 
@@ -743,53 +895,92 @@ export function mapMasterRows(rows: RawRow[], ownerId: string) {
     .map(normalizeRow)
     .filter(
       (row) =>
-        toText(pickValue(row, masterFieldCandidates.customerCode)) !== "" &&
+        toText(pickValue(row, masterFieldCandidates.dealerCode)) !== "" &&
         toText(pickValue(row, masterFieldCandidates.companyName)) !== ""
     )
-    .map<MasterContact>((row) => ({
-      id: randomUUID(),
-      ownerId,
-      customerCode: toText(pickValue(row, masterFieldCandidates.customerCode)),
-      companyName: toText(pickValue(row, masterFieldCandidates.companyName)),
-      primaryContact: toText(pickValue(row, masterFieldCandidates.primaryContact)),
-      email: toText(pickValue(row, masterFieldCandidates.email)),
-      whatsapp: toText(pickValue(row, masterFieldCandidates.whatsapp)),
-      sms: toText(pickValue(row, masterFieldCandidates.sms)),
-      alternateContact: toText(pickValue(row, masterFieldCandidates.alternateContact)),
-      notes: toText(pickValue(row, masterFieldCandidates.notes)),
-      importedAt,
-      raw: Object.fromEntries(
-        Object.entries(row).map(([key, value]) => [key, toText(value)])
-      )
-    }));
+    .map<MasterContact>((row) => {
+      const dealerCode = toText(pickValue(row, masterFieldCandidates.dealerCode));
+
+      return {
+        id: randomUUID(),
+        ownerId,
+        dealerCode,
+        customerCode: dealerCode,
+        companyName: toText(pickValue(row, masterFieldCandidates.companyName)),
+        primaryContact: toText(pickValue(row, masterFieldCandidates.primaryContact)),
+        email: toText(pickValue(row, masterFieldCandidates.email)),
+        whatsapp: toText(pickValue(row, masterFieldCandidates.whatsapp)),
+        sms: toText(pickValue(row, masterFieldCandidates.sms)),
+        alternateContact: toText(pickValue(row, masterFieldCandidates.alternateContact)),
+        notes: toText(pickValue(row, masterFieldCandidates.notes)),
+        importedAt,
+        raw: Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [key, toText(value)])
+        )
+      };
+    });
 }
 
-export function mapDueRows(rows: RawRow[], ownerId: string) {
+export function mapDueRows(rows: RawRow[], ownerId: string, contacts: MasterContact[] = []) {
   const importedAt = new Date().toISOString();
+  const expandedRows = expandGroupedDueRows(rows);
 
-  return rows
+  return expandedRows
     .map(normalizeRow)
     .filter(
       (row) =>
-        toText(pickValue(row, dueFieldCandidates.customerCode)) !== "" &&
-        toText(pickValue(row, dueFieldCandidates.companyName)) !== "" &&
-        toDateValue(pickValue(row, dueFieldCandidates.dueDate)) !== ""
+        (
+          toText(pickValue(row, dueFieldCandidates.dealerCode)) !== "" ||
+          toText(pickValue(row, dueFieldCandidates.companyName)) !== ""
+        ) &&
+        toDateValue(pickValue(row, dueFieldCandidates.billDate)) !== ""
     )
-    .map<DueRecord>((row) => ({
-      id: randomUUID(),
-      ownerId,
-      customerCode: toText(pickValue(row, dueFieldCandidates.customerCode)),
-      companyName: toText(pickValue(row, dueFieldCandidates.companyName)),
-      invoiceNumber: toText(pickValue(row, dueFieldCandidates.invoiceNumber)),
-      invoiceDate: toDateValue(pickValue(row, dueFieldCandidates.invoiceDate)),
-      dueDate: toDateValue(pickValue(row, dueFieldCandidates.dueDate)),
-      amount: toAmount(pickValue(row, dueFieldCandidates.amount)),
-      currency: toText(pickValue(row, dueFieldCandidates.currency)) || "INR",
-      reference: toText(pickValue(row, dueFieldCandidates.reference)),
-      notes: toText(pickValue(row, dueFieldCandidates.notes)),
-      importedAt,
-      raw: Object.fromEntries(
-        Object.entries(row).map(([key, value]) => [key, toText(value)])
-      )
-    }));
+    .map<DueRecord>((row) => {
+      const dealerCode = toText(pickValue(row, dueFieldCandidates.dealerCode));
+      const companyName = toText(pickValue(row, dueFieldCandidates.companyName));
+      const billDate = toDateValue(pickValue(row, dueFieldCandidates.billDate));
+      const pendingAmount = toAmount(pickValue(row, dueFieldCandidates.amount));
+      const match = buildDueContactMatch(
+        {
+          dealerCode,
+          customerCode: dealerCode,
+          companyName,
+          matchedContactId: "",
+          matchedContactName: "",
+          matchedEmail: "",
+          matchedWhatsapp: "",
+          matchedSms: "",
+          contactMatchStatus: "missing"
+        },
+        contacts
+      );
+
+      return {
+        id: randomUUID(),
+        ownerId,
+        dealerCode,
+        customerCode: dealerCode,
+        companyName: match.companyName,
+        billDate,
+        invoiceNumber: toText(pickValue(row, dueFieldCandidates.invoiceNumber)),
+        invoiceDate: billDate,
+        dueDate: toDateValue(pickValue(row, dueFieldCandidates.dueDate)),
+        openingAmount: toAmount(pickValue(row, dueFieldCandidates.openingAmount)),
+        amount: pendingAmount,
+        currency: toText(pickValue(row, dueFieldCandidates.currency)) || "INR",
+        overdueDays: Math.max(0, Math.round(toAmount(pickValue(row, dueFieldCandidates.overdueDays)))),
+        reference: toText(pickValue(row, dueFieldCandidates.reference)),
+        notes: toText(pickValue(row, dueFieldCandidates.notes)),
+        matchedContactId: match.matchedContactId,
+        matchedContactName: match.matchedContactName,
+        matchedEmail: match.matchedEmail,
+        matchedWhatsapp: match.matchedWhatsapp,
+        matchedSms: match.matchedSms,
+        contactMatchStatus: match.contactMatchStatus,
+        importedAt,
+        raw: Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [key, toText(value)])
+        )
+      };
+    });
 }

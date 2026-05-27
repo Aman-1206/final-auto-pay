@@ -1180,13 +1180,25 @@ code {
 }
 
 .table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: clamp(16rem, 42vh, 22rem);
   border-radius: 1.1rem;
+  border: 1px solid rgba(22, 43, 82, 0.08);
+  background: rgba(255, 255, 255, 0.92);
   padding-bottom: 0.15rem;
+  scrollbar-gutter: stable both-edges;
 }
 
 .dashboard-main .table-wrap table {
   min-width: 720px;
+}
+
+.dashboard-main .table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(248, 250, 255, 0.98);
+  backdrop-filter: blur(10px);
 }
 
 .dashboard-main th {
@@ -1476,7 +1488,6 @@ code {
 
 .dispatch-table-wrap {
   border-radius: 1.2rem;
-  border: 1px solid rgba(22, 43, 82, 0.08);
   background: #ffffff;
 }
 
@@ -1491,6 +1502,22 @@ code {
 .dispatch-badge {
   font-size: 0.82rem;
   text-transform: capitalize;
+}
+
+.dispatch-company-cell {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.dispatch-badge-cd {
+  width: fit-content;
+  background: rgba(44, 140, 91, 0.12);
+  color: var(--success);
+}
+
+.dispatch-badge-cd-muted {
+  background: rgba(22, 43, 82, 0.08);
+  color: var(--muted);
 }
 
 .dispatch-status-pending {

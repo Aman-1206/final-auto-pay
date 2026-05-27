@@ -4,10 +4,15 @@ import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { createDefaultRuleSet } from "@/lib/defaults";
 import { readDatabase, updateDatabase } from "@/lib/storage";
-import type { User } from "@/lib/types";
+import type { AuthEvent, User, UserRole } from "@/lib/types";
 
 const sessionCookieName = "apr_session";
 const sessionDurationMs = 1000 * 60 * 60 * 24 * 14;
+
+type SessionMetadata = {
+  ipAddress?: string;
+  userAgent?: string;
+};
 
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
@@ -20,6 +25,40 @@ export function verifyPassword(password: string, storedHash: string) {
   const derived = scryptSync(password, salt, 64);
   const original = Buffer.from(originalHash, "hex");
   return timingSafeEqual(derived, original);
+}
+
+function getSessionTokenSuffix(token: string) {
+  return token.slice(-8);
+}
+
+function buildAuthEvent(
+  user: User,
+  token: string,
+  type: AuthEvent["type"],
+  metadata?: SessionMetadata
+): AuthEvent {
+  return {
+    id: randomUUID(),
+    userId: user.id,
+    userEmail: user.email,
+    userName: user.name,
+    companyName: user.companyName,
+    userRole: user.role,
+    type,
+    sessionTokenSuffix: getSessionTokenSuffix(token),
+    ipAddress: metadata?.ipAddress?.trim() || "Unknown",
+    userAgent: metadata?.userAgent?.trim() || "Unknown device",
+    createdAt: new Date().toISOString()
+  };
+}
+
+export function extractRequestMetadata(request: Request): SessionMetadata {
+  const forwardedFor = request.headers.get("x-forwarded-for") || "";
+  const realIp = request.headers.get("x-real-ip") || "";
+  const ipAddress = forwardedFor.split(",")[0]?.trim() || realIp.trim() || "Unknown";
+  const userAgent = request.headers.get("user-agent") || "Unknown device";
+
+  return { ipAddress, userAgent };
 }
 
 export async function registerUser(input: {
@@ -37,12 +76,15 @@ export async function registerUser(input: {
       throw new Error("An account with this email already exists.");
     }
 
+    const role: UserRole = database.users.length === 0 ? "admin" : "user";
+
     const user: User = {
       id: randomUUID(),
       name: input.name.trim(),
       email: input.email.trim().toLowerCase(),
       companyName: input.companyName.trim(),
       passwordHash: hashPassword(input.password),
+      role,
       createdAt: new Date().toISOString()
     };
 
@@ -52,26 +94,46 @@ export async function registerUser(input: {
     database.reminderRules.push(...defaults.rules);
     database.templates.push(...defaults.templates);
     database.dispatchSettings.push(defaults.dispatchSettings);
+    database.cashDiscountPolicies.push(...defaults.cashDiscountPolicies);
 
     return user;
   });
 }
 
-export async function createSession(userId: string) {
+export async function createSession(userId: string, metadata?: SessionMetadata) {
   const token = randomBytes(32).toString("hex");
   await updateDatabase((database) => {
+    const user = database.users.find((entry) => entry.id === userId);
+    const createdAt = new Date().toISOString();
+
     database.sessions.push({
       token,
       userId,
-      createdAt: new Date().toISOString(),
+      ipAddress: metadata?.ipAddress?.trim() || "Unknown",
+      userAgent: metadata?.userAgent?.trim() || "Unknown device",
+      lastSeenAt: createdAt,
+      createdAt,
       expiresAt: new Date(Date.now() + sessionDurationMs).toISOString()
     });
+
+    if (user) {
+      database.authEvents.push(buildAuthEvent(user, token, "login", metadata));
+    }
   });
   return token;
 }
 
-export async function destroySession(token: string) {
+export async function destroySession(token: string, metadata?: SessionMetadata) {
   await updateDatabase((database) => {
+    const session = database.sessions.find((entry) => entry.token === token);
+    const user = session
+      ? database.users.find((entry) => entry.id === session.userId) ?? null
+      : null;
+
+    if (user) {
+      database.authEvents.push(buildAuthEvent(user, token, "logout", metadata));
+    }
+
     database.sessions = database.sessions.filter((session) => session.token !== token);
   });
 }
@@ -112,6 +174,20 @@ export async function requireUser() {
 
   if (!user) {
     redirect("/login");
+  }
+
+  return user;
+}
+
+export function isAdminUser(user: Pick<User, "role"> | null | undefined) {
+  return user?.role === "admin";
+}
+
+export async function requireAdminUser() {
+  const user = await requireUser();
+
+  if (!isAdminUser(user)) {
+    redirect("/dashboard?error=Admin%20access%20required");
   }
 
   return user;

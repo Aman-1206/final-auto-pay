@@ -1,6 +1,6 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { requireUser } from "@/lib/auth";
+import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
 import { ensureStoredMasterWorkbook } from "@/lib/workbook-sync";
 import { formatDate } from "@/lib/utils";
@@ -24,6 +24,7 @@ export default async function MasterDatabasePage({
       description="Upload your long-lived company contact sheet and keep payment contacts ready for matching."
       companyName={user.companyName}
       userName={user.name}
+      isAdmin={isAdminUser(user)}
     >
       <StatusBar params={params} />
 
@@ -32,7 +33,7 @@ export default async function MasterDatabasePage({
           <div className="section-heading">
             <h2>Upload master Excel</h2>
             <p>
-              Recommended headers: Customer Code, Company Name, Contact Person, Email, WhatsApp,
+              Recommended headers: Dealer Code, Company Name, Contact Person, Email, WhatsApp,
               Phone.
             </p>
           </div>
@@ -83,7 +84,8 @@ export default async function MasterDatabasePage({
             <table>
               <thead>
                 <tr>
-                  <th>Customer code</th>
+                  <th>No.</th>
+                  <th>Dealer code</th>
                   <th>Company</th>
                   <th>Primary contact</th>
                   <th>Email</th>
@@ -94,12 +96,13 @@ export default async function MasterDatabasePage({
               <tbody>
                 {contacts.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>Upload a master file to populate contacts.</td>
+                    <td colSpan={7}>Upload a master file to populate contacts.</td>
                   </tr>
                 ) : (
-                  contacts.slice(0, 20).map((contact) => (
+                  contacts.slice(0, 20).map((contact, index) => (
                     <tr key={contact.id}>
-                      <td>{contact.customerCode || "N/A"}</td>
+                      <td>{index + 1}</td>
+                      <td>{contact.dealerCode || contact.customerCode || "N/A"}</td>
                       <td>{contact.companyName}</td>
                       <td>{contact.primaryContact || "N/A"}</td>
                       <td>{contact.email || "N/A"}</td>

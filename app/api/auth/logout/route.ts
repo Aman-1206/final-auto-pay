@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { clearSessionCookie, destroySession } from "@/lib/auth";
+import { clearSessionCookie, destroySession, extractRequestMetadata } from "@/lib/auth";
 
 export async function POST(request: Request) {
   const sessionToken = request.headers.get("cookie")?.match(/apr_session=([^;]+)/)?.[1];
 
   if (sessionToken) {
-    await destroySession(sessionToken);
+    await destroySession(sessionToken, extractRequestMetadata(request));
   }
 
   const response = NextResponse.redirect(

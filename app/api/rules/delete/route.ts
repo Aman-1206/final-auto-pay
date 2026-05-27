@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireAdminUser } from "@/lib/auth";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdminUser();
   const formData = await request.formData();
   const ruleId = String(formData.get("ruleId") || "");
 
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.redirect(
-    new URL("/dashboard/rules?message=Reminder%20rule%20deleted.", request.url),
+    new URL("/dashboard/settings?message=Reminder%20rule%20deleted.", request.url),
     { status: 303 }
   );
 }

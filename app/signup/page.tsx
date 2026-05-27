@@ -38,7 +38,8 @@ export default function SignupPage({
           <h2>Launch your reminder workspace</h2>
           <p className="hero-copy">
             After signup you land directly in the dashboard with starter rules and editable
-            templates ready to refine.
+            templates ready to refine. The first account becomes admin automatically; later
+            signups join as normal users.
           </p>
 
           <StatusBanner searchParams={searchParams} />

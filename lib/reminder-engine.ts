@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
+import { findMatchingMasterContact } from "@/lib/contact-matching";
+import {
+  isE164PhoneNumber,
+  resolveDispatchSettings
+} from "@/lib/dispatch-settings";
 import { readDatabase, updateDatabase } from "@/lib/storage";
 import type {
+  CashDiscountPolicy,
   DashboardStats,
   DispatchSettings,
   DueRecord,
@@ -10,16 +16,32 @@ import type {
   ReminderRule,
   ReminderTemplate
 } from "@/lib/types";
-import { daysBetween, fillTemplate, formatCurrency, formatDate, normalizeText } from "@/lib/utils";
+import {
+  fillTemplate,
+  formatCurrency,
+  formatDate,
+  getDuePartyKey,
+  getBillAgeDays,
+  normalizeText
+} from "@/lib/utils";
 
 type ReminderContext = {
   due: DueRecord;
   contact: MasterContact;
   rule: ReminderRule;
   template: ReminderTemplate;
+  cdEvaluation: CashDiscountEvaluation;
+  billAgeDays: number;
 };
 
 type ReminderChannelSelection = Partial<Record<ReminderLog["channel"], boolean>>;
+
+type CashDiscountEvaluation = {
+  eligible: boolean;
+  firstBill: boolean;
+  policy: CashDiscountPolicy | null;
+  reason: string;
+};
 
 function buildReminderDedupeKey(
   due: DueRecord,
@@ -27,40 +49,84 @@ function buildReminderDedupeKey(
   channel: ReminderLog["channel"]
 ) {
   return [
-    normalizeText(due.customerCode || due.companyName),
+    normalizeText(due.dealerCode || due.customerCode || due.companyName),
     normalizeText(due.invoiceNumber || due.reference || "no-invoice"),
-    due.dueDate,
+    due.billDate || due.invoiceDate || "no-bill-date",
     rule.id,
     channel
   ].join("|");
 }
 
-function matchContact(due: DueRecord, contacts: MasterContact[]) {
-  const customerCode = normalizeText(due.customerCode || "");
-
-  if (customerCode) {
-    const codeMatch = contacts.find(
-      (contact) => normalizeText(contact.customerCode || "") === customerCode
-    );
-
-    if (codeMatch) {
-      return codeMatch;
-    }
+function buildCashDiscountSummary(evaluation: CashDiscountEvaluation) {
+  if (evaluation.eligible && evaluation.policy) {
+    return `Cash discount status: eligible for ${evaluation.policy.discountPercent}% if payment clears within ${evaluation.policy.paymentWindowDays} days and no older unpaid invoices exist.`;
   }
 
-  const companyKey = normalizeText(due.companyName);
-  return contacts.find((contact) => normalizeText(contact.companyName) === companyKey) ?? null;
+  return `Cash discount status: ${evaluation.reason}`;
+}
+
+function buildCashDiscountShortSummary(evaluation: CashDiscountEvaluation) {
+  if (evaluation.eligible && evaluation.policy) {
+    return `Eligible for ${evaluation.policy.discountPercent}% CD within ${evaluation.policy.paymentWindowDays} days.`;
+  }
+
+  return evaluation.reason;
+}
+
+function buildCashDiscountMessage(evaluation: CashDiscountEvaluation) {
+  if (!evaluation.eligible || !evaluation.policy) {
+    return "";
+  }
+
+  const prefix = evaluation.firstBill
+    ? "Since no older unpaid bill is pending for your account,"
+    : "Since you have cleared all earlier bills,";
+
+  return `${prefix} we are giving you CD of ${evaluation.policy.discountPercent}% if this invoice is cleared within ${evaluation.policy.paymentWindowDays} days.`;
+}
+
+function buildCashDiscountShortMessage(evaluation: CashDiscountEvaluation) {
+  if (!evaluation.eligible || !evaluation.policy) {
+    return "";
+  }
+
+  const prefix = evaluation.firstBill
+    ? "Since no older unpaid bill is pending,"
+    : "Since you have cleared all earlier bills,";
+
+  return `${prefix} we are giving you CD of ${evaluation.policy.discountPercent}% if paid within ${evaluation.policy.paymentWindowDays} days.`;
 }
 
 function buildReplacements(context: ReminderContext, senderCompany: string) {
+  const billDate = context.due.billDate || context.due.invoiceDate;
+
   return {
     amount: formatCurrency(context.due.amount, context.due.currency),
+    billAgeDays: context.billAgeDays,
+    billDate: formatDate(billDate),
+    companyBillKey: getDuePartyKey(context.due),
+    cdDiscountPercent: context.cdEvaluation.policy?.discountPercent ?? 0,
+    cdEligible: context.cdEvaluation.eligible ? "Eligible" : "Not eligible",
+    cdMessage: buildCashDiscountMessage(context.cdEvaluation),
+    cdPolicyWindowDays: context.cdEvaluation.policy?.paymentWindowDays ?? 0,
+    cdReason: context.cdEvaluation.reason,
+    cdShortMessage: buildCashDiscountShortMessage(context.cdEvaluation),
+    cdShortSummary: buildCashDiscountShortSummary(context.cdEvaluation),
+    cdSummary: buildCashDiscountSummary(context.cdEvaluation),
     companyName: context.due.companyName,
-    contactName: context.contact.primaryContact || "Accounts Team",
-    daysBeforeDue: context.rule.daysBeforeDue,
-    dueDate: formatDate(context.due.dueDate),
+    contactName:
+      context.contact.primaryContact ||
+      context.due.matchedContactName ||
+      "Accounts Team",
+    daysBeforeDue: context.rule.triggerDay,
+    dealerCode: context.due.dealerCode || context.due.customerCode,
+    dueDate: context.due.dueDate ? formatDate(context.due.dueDate) : "Not available",
     invoiceNumber: context.due.invoiceNumber || context.due.reference || "N/A",
-    reference: context.due.reference,
+    openingAmount: formatCurrency(context.due.openingAmount, context.due.currency),
+    overdueDays: context.due.overdueDays,
+    pendingAmount: formatCurrency(context.due.amount, context.due.currency),
+    reference: context.due.reference || context.due.invoiceNumber || "N/A",
+    reminderDay: context.rule.triggerDay,
     senderCompany
   };
 }
@@ -69,45 +135,37 @@ function buildChannelEntries(
   rule: ReminderRule,
   template: ReminderTemplate,
   contact: MasterContact,
+  due: DueRecord,
   channelSelection?: ReminderChannelSelection
 ): Array<[ReminderLog["channel"], boolean, string, string]> {
   return [
     [
       "email",
       channelSelection?.email ?? rule.channels.email,
-      contact.email,
+      contact.email || due.matchedEmail,
       template.emailBody
     ],
     [
       "whatsapp",
       channelSelection?.whatsapp ?? rule.channels.whatsapp,
-      contact.whatsapp,
+      contact.whatsapp || due.matchedWhatsapp,
       template.whatsappBody
     ],
-    ["sms", channelSelection?.sms ?? rule.channels.sms, contact.sms, template.smsBody]
+    [
+      "sms",
+      channelSelection?.sms ?? rule.channels.sms,
+      contact.sms || due.matchedSms,
+      template.smsBody
+    ]
   ];
 }
 
-function hasExistingLog(
-  logs: ReminderLog[],
-  dedupeKey: string,
-  scheduledFor: string
-) {
+function hasExistingLog(logs: ReminderLog[], dedupeKey: string, scheduledFor: string) {
   return logs.some(
-    (log) => (log.dedupeKey || `${log.dueId}|${log.ruleId}|${log.channel}`) === dedupeKey && log.scheduledFor === scheduledFor
+    (log) =>
+      (log.dedupeKey || `${log.dueId}|${log.ruleId}|${log.channel}`) === dedupeKey &&
+      log.scheduledFor === scheduledFor
   );
-}
-
-function toBoolean(value: string | undefined, fallback: boolean) {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  return value.toLowerCase() === "true";
-}
-
-function isE164PhoneNumber(value: string) {
-  return /^\+[1-9]\d{7,14}$/.test(value.trim());
 }
 
 function normalizePhoneNumberForTwilio(value: string) {
@@ -115,6 +173,14 @@ function normalizePhoneNumberForTwilio(value: string) {
 
   if (isE164PhoneNumber(trimmed)) {
     return trimmed;
+  }
+
+  if (/^[6-9]\d{9}$/.test(trimmed)) {
+    return `+91${trimmed}`;
+  }
+
+  if (/^91\d{10}$/.test(trimmed)) {
+    return `+${trimmed}`;
   }
 
   if (/^[1-9]\d{7,14}$/.test(trimmed)) {
@@ -133,33 +199,106 @@ function normalizeWhatsappAddressForTwilio(value: string) {
   return `whatsapp:${normalizePhoneNumberForTwilio(withoutPrefix)}`;
 }
 
-function resolveDispatchSettings(settings: DispatchSettings): DispatchSettings {
-  const savedSmsFromNumber = (settings.smsFromNumber || "").trim();
-  const envSmsFromNumber = (process.env.TWILIO_FROM_NUMBER || "").trim();
-  const legacySmsSenderId = (settings.smsSenderId || "").trim();
-  const smsFromNumber = [
-    savedSmsFromNumber,
-    envSmsFromNumber,
-    isE164PhoneNumber(legacySmsSenderId) ? legacySmsSenderId : ""
-  ].find((value) => value !== "") || "";
-  const whatsappFromNumber =
-    [
-      (settings.whatsappFromNumber || "").trim(),
-      (process.env.TWILIO_WHATSAPP_FROM_NUMBER || "").trim()
-    ].find((value) => value !== "") || "";
+function templateIncludesCashDiscountToken(template: string) {
+  return /\{\{\s*cd(?:Message|ShortMessage|Summary|ShortSummary|Eligible|DiscountPercent|PolicyWindowDays|Reason)\s*\}\}/i.test(
+    template
+  );
+}
 
+function composeReminderContent(
+  channel: ReminderLog["channel"],
+  template: string,
+  replacements: Record<string, string | number>,
+  evaluation: CashDiscountEvaluation
+) {
+  const filledTemplate = fillTemplate(template, replacements).trim();
+
+  if (templateIncludesCashDiscountToken(template) || !evaluation.eligible) {
+    return filledTemplate;
+  }
+
+  const appendedCashDiscountMessage =
+    channel === "email"
+      ? buildCashDiscountMessage(evaluation)
+      : buildCashDiscountShortMessage(evaluation);
+
+  if (!appendedCashDiscountMessage) {
+    return filledTemplate;
+  }
+
+  return channel === "email"
+    ? `${filledTemplate}\n\n${appendedCashDiscountMessage}`.trim()
+    : `${filledTemplate} ${appendedCashDiscountMessage}`.trim();
+}
+
+function evaluateCashDiscountEligibility(
+  due: DueRecord,
+  allDuesForDealer: DueRecord[],
+  policies: CashDiscountPolicy[],
+  referenceDate: Date
+): CashDiscountEvaluation {
+  const billAgeDays = getBillAgeDays(due.billDate || due.invoiceDate, referenceDate);
+
+  if (billAgeDays === null) {
+    return {
+      eligible: false,
+      firstBill: false,
+      policy: null,
+      reason: "Bill date is missing, so CD eligibility could not be evaluated."
+    };
+  }
+
+  const olderBills = allDuesForDealer
+    .filter((entry) => entry.id !== due.id)
+    .filter((entry) => {
+      const otherBillDate = new Date(entry.billDate || entry.invoiceDate || "");
+      const currentBillDate = new Date(due.billDate || due.invoiceDate || "");
+
+      return (
+        !Number.isNaN(otherBillDate.getTime()) &&
+        !Number.isNaN(currentBillDate.getTime()) &&
+        otherBillDate.getTime() < currentBillDate.getTime()
+      );
+    })
+    .sort((left, right) => (left.billDate || left.invoiceDate).localeCompare(right.billDate || right.invoiceDate));
+
+  const olderUnpaidBills = olderBills
+    .filter((entry) => entry.amount > 0)
+    .sort((left, right) => (left.billDate || left.invoiceDate).localeCompare(right.billDate || right.invoiceDate));
+
+  if (olderUnpaidBills.length > 0) {
+    const oldestPending = olderUnpaidBills[0];
+    return {
+      eligible: false,
+      firstBill: false,
+      policy: null,
+      reason: `Older unpaid invoice ${oldestPending.invoiceNumber || oldestPending.reference || "N/A"} is still open.`
+    };
+  }
+
+  const eligiblePolicy =
+    policies
+      .filter((policy) => policy.enabled)
+      .sort((left, right) => left.paymentWindowDays - right.paymentWindowDays)
+      .find((policy) => billAgeDays <= policy.paymentWindowDays) || null;
+
+  if (!eligiblePolicy) {
+    return {
+      eligible: false,
+      firstBill: olderBills.length === 0,
+      policy: null,
+      reason: "Bill age is outside every configured cash discount window."
+    };
+  }
+
+  const firstBill = olderBills.length === 0;
   return {
-    ...settings,
-    simulateMode: toBoolean(process.env.REMINDER_SIMULATE_MODE, settings.simulateMode),
-    smtpHost: settings.smtpHost || process.env.SMTP_HOST || "",
-    smtpPort: Number(process.env.SMTP_PORT || settings.smtpPort || 587),
-    smtpSecure: toBoolean(process.env.SMTP_SECURE, settings.smtpSecure),
-    smtpUser: settings.smtpUser || process.env.SMTP_USER || "",
-    smtpPass: settings.smtpPass || process.env.SMTP_PASS || "",
-    smtpFrom: settings.smtpFrom || process.env.SMTP_FROM || "",
-    smsFromNumber,
-    whatsappFromNumber,
-    whatsappWebhookUrl: settings.whatsappWebhookUrl || process.env.WHATSAPP_WEBHOOK_URL || ""
+    eligible: true,
+    firstBill,
+    policy: eligiblePolicy,
+    reason: firstBill
+      ? `Eligible for ${eligiblePolicy.discountPercent}% CD under the ${eligiblePolicy.paymentWindowDays}-day policy because this is the first active bill on record.`
+      : `Eligible for ${eligiblePolicy.discountPercent}% CD under the ${eligiblePolicy.paymentWindowDays}-day policy because no older unpaid invoices remain open.`
   };
 }
 
@@ -181,11 +320,14 @@ export async function getDashboardStats(ownerId: string): Promise<DashboardStats
 }
 
 export async function generateRemindersForUser(ownerId: string, requestedDate?: string) {
-  return updateDatabase((database) => {
+  return updateDatabase(async (database) => {
     const contacts = database.masterContacts.filter((entry) => entry.ownerId === ownerId);
     const dues = database.dueRecords.filter((entry) => entry.ownerId === ownerId);
-    const rules = database.reminderRules.filter((entry) => entry.ownerId === ownerId && entry.enabled);
+    const rules = database.reminderRules
+      .filter((entry) => entry.ownerId === ownerId && entry.enabled)
+      .sort((left, right) => left.triggerDay - right.triggerDay);
     const templates = database.templates.filter((entry) => entry.ownerId === ownerId);
+    const policies = database.cashDiscountPolicies.filter((entry) => entry.ownerId === ownerId);
     const user = database.users.find((entry) => entry.id === ownerId);
     const today = requestedDate ? new Date(requestedDate) : new Date();
     const scheduledFor = new Date(
@@ -194,15 +336,27 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
     const created: ReminderLog[] = [];
 
     for (const due of dues) {
-      const contact = matchContact(due, contacts);
+      const contact = findMatchingMasterContact(due, contacts);
       if (!contact) {
         continue;
       }
 
-      const daysUntilDue = daysBetween(today, new Date(due.dueDate));
+      const billAgeDays = getBillAgeDays(due.billDate || due.invoiceDate, today);
+      if (billAgeDays === null) {
+        continue;
+      }
+
+      const cdEvaluation = evaluateCashDiscountEligibility(
+        due,
+        dues.filter(
+          (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
+        ),
+        policies,
+        today
+      );
 
       for (const rule of rules) {
-        if (daysUntilDue !== rule.daysBeforeDue) {
+        if (billAgeDays !== rule.triggerDay) {
           continue;
         }
 
@@ -212,11 +366,10 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
         }
 
         const replacements = buildReplacements(
-          { due, contact, rule, template },
+          { due, contact, rule, template, cdEvaluation, billAgeDays },
           user?.companyName || "Your Company"
         );
-
-        const channelEntries = buildChannelEntries(rule, template, contact);
+        const channelEntries = buildChannelEntries(rule, template, contact, due);
 
         for (const [channel, enabled, recipient, body] of channelEntries) {
           if (!enabled || !recipient) {
@@ -237,6 +390,14 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
             contactId: contact.id,
             ruleId: rule.id,
             templateId: template.id,
+            dealerCode: due.dealerCode || due.customerCode,
+            invoiceNumber: due.invoiceNumber || due.reference || "",
+            reminderDay: rule.triggerDay,
+            billAgeDays,
+            cdEligible: cdEvaluation.eligible,
+            cdPolicyId: cdEvaluation.policy?.id || "",
+            cdDiscountPercent: cdEvaluation.policy?.discountPercent ?? 0,
+            cdReason: cdEvaluation.reason,
             channel,
             recipient,
             scheduledFor,
@@ -245,7 +406,7 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
               channel === "email"
                 ? fillTemplate(template.emailSubject, replacements)
                 : `${rule.name} reminder`,
-            content: fillTemplate(body, replacements),
+            content: composeReminderContent(channel, body, replacements, cdEvaluation),
             failureReason: "",
             sentAt: "",
             createdAt: new Date().toISOString()
@@ -255,6 +416,34 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
     }
 
     database.reminderLogs.push(...created);
+    const autoSendRuleIds = Array.from(
+      new Set(created.map((entry) => entry.ruleId).filter((ruleId) => rules.find((rule) => rule.id === ruleId && rule.autoSend)))
+    );
+
+    if (autoSendRuleIds.length > 0) {
+      const settings = database.dispatchSettings.find((entry) => entry.ownerId === ownerId);
+
+      if (!settings) {
+        throw new Error("Dispatch settings are missing.");
+      }
+
+      const resolvedSettings = resolveDispatchSettings(settings);
+      const autoSendLogs = created.filter((entry) => autoSendRuleIds.includes(entry.ruleId));
+
+      for (const log of autoSendLogs) {
+        try {
+          const status = await deliverReminder(log, resolvedSettings);
+          log.status = status;
+          log.sentAt = new Date().toISOString();
+          log.failureReason = "";
+        } catch (error) {
+          log.status = "failed";
+          log.failureReason =
+            error instanceof Error ? error.message : "Unknown sending error occurred.";
+        }
+      }
+    }
+
     return created;
   });
 }
@@ -271,7 +460,7 @@ export async function createManualRemindersForDue(
       throw new Error("The selected invoice could not be found.");
     }
 
-    const contact = matchContact(
+    const contact = findMatchingMasterContact(
       due,
       database.masterContacts.filter((entry) => entry.ownerId === ownerId)
     );
@@ -291,14 +480,28 @@ export async function createManualRemindersForDue(
       throw new Error("The selected reminder template could not be found.");
     }
 
+    const billAgeDays = getBillAgeDays(due.billDate || due.invoiceDate, new Date());
+    if (billAgeDays === null) {
+      throw new Error("The selected invoice does not have a valid bill date.");
+    }
+
+    const policies = database.cashDiscountPolicies.filter((entry) => entry.ownerId === ownerId);
+    const cdEvaluation = evaluateCashDiscountEligibility(
+      due,
+      database.dueRecords.filter(
+        (entry) => entry.ownerId === ownerId && getDuePartyKey(entry) === getDuePartyKey(due)
+      ),
+      policies,
+      new Date()
+    );
     const user = database.users.find((entry) => entry.id === ownerId);
     const scheduledFor = new Date().toISOString();
     const replacements = buildReplacements(
-      { due, contact, rule, template },
+      { due, contact, rule, template, cdEvaluation, billAgeDays },
       user?.companyName || "Your Company"
     );
     const created: ReminderLog[] = [];
-    const channelEntries = buildChannelEntries(rule, template, contact, channelSelection);
+    const channelEntries = buildChannelEntries(rule, template, contact, due, channelSelection);
 
     for (const [channel, enabled, recipient, body] of channelEntries) {
       if (!enabled || !recipient) {
@@ -313,6 +516,14 @@ export async function createManualRemindersForDue(
         contactId: contact.id,
         ruleId: rule.id,
         templateId: template.id,
+        dealerCode: due.dealerCode || due.customerCode,
+        invoiceNumber: due.invoiceNumber || due.reference || "",
+        reminderDay: rule.triggerDay,
+        billAgeDays,
+        cdEligible: cdEvaluation.eligible,
+        cdPolicyId: cdEvaluation.policy?.id || "",
+        cdDiscountPercent: cdEvaluation.policy?.discountPercent ?? 0,
+        cdReason: cdEvaluation.reason,
         channel,
         recipient,
         scheduledFor,
@@ -321,7 +532,7 @@ export async function createManualRemindersForDue(
           channel === "email"
             ? fillTemplate(template.emailSubject, replacements)
             : `${rule.name} reminder`,
-        content: fillTemplate(body, replacements),
+        content: composeReminderContent(channel, body, replacements, cdEvaluation),
         failureReason: "",
         sentAt: "",
         createdAt: scheduledFor
@@ -353,7 +564,7 @@ async function sendEmail(log: ReminderLog, settings: DispatchSettings) {
   });
 
   await transporter.sendMail({
-    from: settings.smtpFrom,
+    from: settings.senderEmail || settings.smtpFrom,
     to: log.recipient,
     subject: log.subject,
     text: log.content
@@ -370,7 +581,9 @@ async function postWebhook(url: string, log: ReminderLog) {
       recipient: log.recipient,
       subject: log.subject,
       message: log.content,
-      channel: log.channel
+      channel: log.channel,
+      dealerCode: log.dealerCode,
+      billAgeDays: log.billAgeDays
     })
   });
 
@@ -379,9 +592,56 @@ async function postWebhook(url: string, log: ReminderLog) {
   }
 }
 
-async function sendTwilioMessage(from: string, to: string, body: string, channelLabel: string) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
-  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+function resolveTwilioCredentials(
+  settings: DispatchSettings,
+  channel: "sms" | "whatsapp"
+) {
+  if (channel === "whatsapp") {
+    return {
+      accountSid:
+        settings.whatsappAccountSid ||
+        settings.whatsappApiKey ||
+        settings.smsAccountSid ||
+        settings.smsApiKey ||
+        process.env.TWILIO_ACCOUNT_SID ||
+        "",
+      authToken:
+        settings.whatsappAuthToken ||
+        settings.whatsappApiSecret ||
+        settings.smsAuthToken ||
+        settings.smsApiSecret ||
+        process.env.TWILIO_AUTH_TOKEN ||
+        ""
+    };
+  }
+
+  return {
+    accountSid:
+      settings.smsAccountSid ||
+      settings.smsApiKey ||
+      settings.whatsappAccountSid ||
+      settings.whatsappApiKey ||
+      process.env.TWILIO_ACCOUNT_SID ||
+      "",
+    authToken:
+      settings.smsAuthToken ||
+      settings.smsApiSecret ||
+      settings.whatsappAuthToken ||
+      settings.whatsappApiSecret ||
+      process.env.TWILIO_AUTH_TOKEN ||
+      ""
+  };
+}
+
+async function sendTwilioMessage(
+  from: string,
+  to: string,
+  body: string,
+  channelLabel: string,
+  settings: DispatchSettings,
+  channel: "sms" | "whatsapp"
+) {
+  const { accountSid, authToken } = resolveTwilioCredentials(settings, channel);
 
   if (!accountSid) {
     throw new Error("Twilio Account SID is missing.");
@@ -438,7 +698,9 @@ async function sendTwilioSms(log: ReminderLog, settings: DispatchSettings) {
     normalizePhoneNumberForTwilio(settings.smsFromNumber),
     normalizePhoneNumberForTwilio(log.recipient),
     log.content,
-    "SMS"
+    "SMS",
+    settings,
+    "sms"
   );
 }
 
@@ -451,7 +713,9 @@ async function sendTwilioWhatsapp(log: ReminderLog, settings: DispatchSettings) 
     normalizeWhatsappAddressForTwilio(settings.whatsappFromNumber),
     normalizeWhatsappAddressForTwilio(log.recipient),
     log.content,
-    "WhatsApp"
+    "WhatsApp",
+    settings,
+    "whatsapp"
   );
 }
 
@@ -461,7 +725,7 @@ async function deliverReminder(log: ReminderLog, settings: DispatchSettings) {
   }
 
   if (log.channel === "email") {
-    if (!settings.smtpHost || !settings.smtpFrom) {
+    if (!settings.smtpHost || !(settings.senderEmail || settings.smtpFrom)) {
       throw new Error("SMTP settings are incomplete.");
     }
 

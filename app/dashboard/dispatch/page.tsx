@@ -1,7 +1,10 @@
 import { DashboardShell } from "@/components/dashboard-shell";
-import { requireUser } from "@/lib/auth";
+import { findMatchingMasterContact } from "@/lib/contact-matching";
+import { isAdminUser, requireUser } from "@/lib/auth";
+import { resolveDispatchSettings } from "@/lib/dispatch-settings";
 import { readDatabase } from "@/lib/storage";
 import { formatDate } from "@/lib/utils";
+import Link from "next/link";
 
 export default async function DispatchPage({
   searchParams
@@ -10,22 +13,28 @@ export default async function DispatchPage({
 }) {
   const user = await requireUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
-  const envSmsFromNumber = process.env.TWILIO_FROM_NUMBER || "";
-  const envWhatsappFromNumber = process.env.TWILIO_WHATSAPP_FROM_NUMBER || "";
+  const isAdmin = isAdminUser(user);
 
-  const settings = database.dispatchSettings.find((entry) => entry.ownerId === user.id);
+  const settings = resolveDispatchSettings(
+    database.dispatchSettings.find((entry) => entry.ownerId === user.id) ?? { ownerId: user.id }
+  );
+  const masterContacts = database.masterContacts.filter((entry) => entry.ownerId === user.id);
   const dueRecords = database.dueRecords
     .filter((entry) => entry.ownerId === user.id)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate));
+  const sendableDueRecords = dueRecords.filter((entry) =>
+    Boolean(findMatchingMasterContact(entry, masterContacts))
+  );
+  const unmatchedDueCount = dueRecords.length - sendableDueRecords.length;
   const rules = database.reminderRules
     .filter((entry) => entry.ownerId === user.id)
-    .sort((left, right) => right.daysBeforeDue - left.daysBeforeDue);
+    .sort((left, right) => left.triggerDay - right.triggerDay);
   const dueRecordMap = new Map(dueRecords.map((entry) => [entry.id, entry]));
   const ruleMap = new Map(rules.map((entry) => [entry.id, entry]));
   const allReminderLogs = database.reminderLogs
     .filter((entry) => entry.ownerId === user.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  const reminderLogs = allReminderLogs.slice(0, 20);
+  const reminderLogs = allReminderLogs;
   const pendingCount = allReminderLogs.filter((entry) => entry.status === "pending").length;
   const failedCount = allReminderLogs.filter((entry) => entry.status === "failed").length;
   const deliveredCount = allReminderLogs.filter(
@@ -38,6 +47,7 @@ export default async function DispatchPage({
       description="Generate reminders only when you choose, review the day-based queue, and send it when you are ready."
       companyName={user.companyName}
       userName={user.name}
+      isAdmin={isAdmin}
     >
       <section className="dispatch-shell">
         <StatusBar params={params} />
@@ -75,102 +85,37 @@ export default async function DispatchPage({
         <section className="dispatch-grid">
           <article className="dispatch-card dispatch-card-dark">
             <div className="dispatch-heading">
-              <h2>Dispatch settings</h2>
+              <h2>Communication setup</h2>
               <p>
-                Twilio account credentials stay in env. This screen stores the sender numbers and
-                email settings your team will use.
+                Admin keeps provider credentials in Contact Settings. This page stays focused on
+                queue generation, review, and sending.
               </p>
             </div>
 
-            <form action="/api/providers/save" method="post" className="dispatch-form">
-              <label className="checkbox-field dispatch-check">
-                <input
-                  name="simulateMode"
-                  type="checkbox"
-                  defaultChecked={settings?.simulateMode ?? true}
-                />
-                <span>Run in simulate mode until all providers are confirmed</span>
-              </label>
+            <div className="stacked-layout">
+              <p className="muted-copy">
+                Current mode: <strong>{settings.simulateMode ? "Simulate" : "Live send"}</strong>
+              </p>
+              <p className="muted-copy">
+                Sender email: {settings.senderEmail || settings.smtpFrom || "Not configured"}
+              </p>
+              <p className="muted-copy">
+                SMS sender: {settings.smsFromNumber || "Not configured"}
+              </p>
+              <p className="muted-copy">
+                WhatsApp sender: {settings.whatsappFromNumber || "Not configured"}
+              </p>
 
-              <div className="dispatch-form-grid">
-                <label className="field">
-                  <span>SMTP host</span>
-                  <input name="smtpHost" type="text" defaultValue={settings?.smtpHost ?? ""} />
-                </label>
-
-                <label className="field">
-                  <span>From email</span>
-                  <input name="smtpFrom" type="email" defaultValue={settings?.smtpFrom ?? ""} />
-                </label>
-
-                <label className="field">
-                  <span>SMTP port</span>
-                  <input
-                    name="smtpPort"
-                    type="number"
-                    defaultValue={settings?.smtpPort ?? 587}
-                    min={1}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>SMTP username</span>
-                  <input name="smtpUser" type="text" defaultValue={settings?.smtpUser ?? ""} />
-                </label>
-
-                <label className="field">
-                  <span>SMTP password</span>
-                  <input
-                    name="smtpPass"
-                    type="password"
-                    defaultValue={settings?.smtpPass ?? ""}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Twilio SMS sender</span>
-                  <input
-                    name="smsFromNumber"
-                    type="text"
-                    placeholder="+14155550123"
-                    defaultValue={
-                      settings?.smsFromNumber || envSmsFromNumber || settings?.smsSenderId || ""
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Twilio WhatsApp sender</span>
-                  <input
-                    name="whatsappFromNumber"
-                    type="text"
-                    placeholder="+14155238886"
-                    defaultValue={settings?.whatsappFromNumber || envWhatsappFromNumber || ""}
-                  />
-                </label>
-              </div>
-
-              <label className="checkbox-field dispatch-check">
-                <input
-                  name="smtpSecure"
-                  type="checkbox"
-                  defaultChecked={settings?.smtpSecure ?? false}
-                />
-                <span>Use secure SMTP when your provider requires it</span>
-              </label>
-
-              <div className="dispatch-note">
-                <p>Env fallback</p>
-                <span>
-                  Use <code>TWILIO_FROM_NUMBER</code> and <code>TWILIO_WHATSAPP_FROM_NUMBER</code>
-                  {" "}when you want defaults without saving them per user.
-                </span>
-              </div>
-
-              <button className="button" type="submit">
-                Save dispatch settings
-              </button>
-            </form>
+              {isAdmin ? (
+                <Link className="button" href="/dashboard/settings">
+                  Open admin dashboard
+                </Link>
+              ) : (
+                <p className="dispatch-note dispatch-note-plain">
+                  Provider settings, rule templates, and CD policies are managed by your admin.
+                </p>
+              )}
+            </div>
           </article>
 
           <article className="dispatch-card">
@@ -178,7 +123,7 @@ export default async function DispatchPage({
               <h2>Queue actions</h2>
               <p>
                 Uploads only sync your data now. First generate reminders using the selected date
-                and your rule day windows, then send the queued reminders when you are ready.
+                and your bill-age rules, then send the queued reminders when you are ready.
               </p>
             </div>
 
@@ -211,17 +156,21 @@ export default async function DispatchPage({
             </p>
           </div>
 
-          {dueRecords.length === 0 || rules.length === 0 ? (
+          {sendableDueRecords.length === 0 || rules.length === 0 ? (
             <p className="dispatch-empty">
-              Upload due records and create at least one reminder rule to unlock manual sending.
+              {dueRecords.length === 0
+                ? "Upload due records and create at least one reminder rule to unlock manual sending."
+                : rules.length === 0
+                  ? "Create at least one reminder rule to unlock manual sending."
+                  : "No invoices currently resolve to a master contact. Re-upload matching master or due data first."}
             </p>
           ) : (
             <form action="/api/reminders/send" method="post" className="dispatch-form">
               <div className="dispatch-form-grid">
                 <label className="field">
                   <span>Choose invoice</span>
-                  <select name="dueId" defaultValue={dueRecords[0]?.id}>
-                    {dueRecords.map((due) => (
+                  <select name="dueId" defaultValue={sendableDueRecords[0]?.id}>
+                    {sendableDueRecords.map((due) => (
                       <option key={due.id} value={due.id}>
                         {(due.invoiceNumber || due.reference || "No invoice number") +
                           " - " +
@@ -238,7 +187,7 @@ export default async function DispatchPage({
                   <select name="ruleId" defaultValue={rules[0]?.id}>
                     {rules.map((rule) => (
                       <option key={rule.id} value={rule.id}>
-                        {rule.name} ({rule.daysBeforeDue} day reminder)
+                        {rule.name} (day {rule.triggerDay} reminder)
                         {rule.enabled ? "" : " - disabled for auto generation"}
                       </option>
                     ))}
@@ -268,6 +217,13 @@ export default async function DispatchPage({
                 selected rule.
               </p>
 
+              {unmatchedDueCount > 0 ? (
+                <p className="dispatch-note dispatch-note-plain">
+                  {unmatchedDueCount} invoice{unmatchedDueCount === 1 ? "" : "s"} hidden here because
+                  no matching master contact could be resolved.
+                </p>
+              ) : null}
+
               <button className="button" type="submit">
                 Send selected reminder now
               </button>
@@ -278,35 +234,55 @@ export default async function DispatchPage({
         <article className="dispatch-card">
           <div className="dispatch-heading">
             <h2>Reminder queue</h2>
-            <p>Showing the latest 20 reminder logs across all channels.</p>
+            <p>Showing all reminder logs across all channels.</p>
           </div>
 
           <div className="table-wrap dispatch-table-wrap">
             <table className="dispatch-table">
               <thead>
                 <tr>
+                  <th>No.</th>
                   <th>Invoice</th>
+                  <th>Company</th>
                   <th>Rule</th>
                   <th>Channel</th>
                   <th>Recipient</th>
                   <th>Status</th>
                   <th>Scheduled</th>
-                  <th>Failure reason</th>
+                  <th>CD</th>
+                  <th>Failure / CD note</th>
                 </tr>
               </thead>
               <tbody>
                 {reminderLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>Upload a dues file to populate the queue.</td>
+                    <td colSpan={10}>Upload a dues file to populate the queue.</td>
                   </tr>
                 ) : (
-                  reminderLogs.map((log) => {
+                  reminderLogs.map((log, index) => {
                     const due = dueRecordMap.get(log.dueId);
                     const rule = ruleMap.get(log.ruleId);
 
                     return (
                       <tr key={log.id}>
+                        <td>{index + 1}</td>
                         <td>{due?.invoiceNumber || due?.reference || due?.companyName || "N/A"}</td>
+                        <td>
+                          <div className="dispatch-company-cell">
+                            <span>{due?.companyName || log.dealerCode || "N/A"}</span>
+                            <span
+                              className={`dispatch-badge ${
+                                log.cdEligible
+                                  ? "dispatch-badge-cd"
+                                  : "dispatch-badge-cd dispatch-badge-cd-muted"
+                              }`}
+                            >
+                              {log.cdEligible
+                                ? `CD ${log.cdDiscountPercent}%`
+                                : "No CD"}
+                            </span>
+                          </div>
+                        </td>
                         <td>{rule?.name || "Unknown rule"}</td>
                         <td>
                           <span className="dispatch-badge">{formatChannelLabel(log.channel)}</span>
@@ -318,7 +294,12 @@ export default async function DispatchPage({
                           </span>
                         </td>
                         <td>{formatDate(log.scheduledFor)}</td>
-                        <td>{log.failureReason || "-"}</td>
+                        <td>
+                          {log.cdEligible
+                            ? `${log.cdDiscountPercent}% eligible`
+                            : "Not eligible"}
+                        </td>
+                        <td>{log.failureReason || log.cdReason || "-"}</td>
                       </tr>
                     );
                   })

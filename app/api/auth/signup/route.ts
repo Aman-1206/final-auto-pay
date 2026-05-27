@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { attachSessionCookie, createSession, registerUser } from "@/lib/auth";
+import {
+  attachSessionCookie,
+  createSession,
+  extractRequestMetadata,
+  registerUser
+} from "@/lib/auth";
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -17,7 +22,7 @@ export async function POST(request: Request) {
 
   try {
     const user = await registerUser({ name, email, companyName, password });
-    const token = await createSession(user.id);
+    const token = await createSession(user.id, extractRequestMetadata(request));
     const response = NextResponse.redirect(new URL("/dashboard", request.url), { status: 303 });
     return attachSessionCookie(response, token);
   } catch (error) {

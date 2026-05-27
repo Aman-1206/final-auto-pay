@@ -1,5 +1,5 @@
 import { DashboardShell } from "@/components/dashboard-shell";
-import { requireUser } from "@/lib/auth";
+import { isAdminUser, requireUser } from "@/lib/auth";
 import { getDashboardStats } from "@/lib/reminder-engine";
 import { readDatabase } from "@/lib/storage";
 import { formatCurrency, formatDate, formatElapsedDaysTag } from "@/lib/utils";
@@ -31,6 +31,7 @@ export default async function DashboardOverview({
       description="Track your imported records, check upcoming dues, and see the latest reminder activity."
       companyName={user.companyName}
       userName={user.name}
+      isAdmin={isAdminUser(user)}
     >
       <StatusBar params={params} />
 
@@ -57,31 +58,35 @@ export default async function DashboardOverview({
         <article className="glass-panel">
           <div className="section-heading">
             <h2>Upcoming dues</h2>
-            <p>Generate reminders from these due dates whenever you are ready to build the queue.</p>
+            <p>Generate reminders from current bill age whenever you are ready to build the queue.</p>
           </div>
 
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th>No.</th>
                   <th>Company</th>
                   <th>Invoice</th>
                   <th>Bill age</th>
+                  <th>Overdue</th>
                   <th>Due date</th>
-                  <th>Amount</th>
+                  <th>Pending</th>
                 </tr>
               </thead>
               <tbody>
                 {dueRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={5}>No due records uploaded yet.</td>
+                    <td colSpan={7}>No due records uploaded yet.</td>
                   </tr>
                 ) : (
-                  dueRecords.map((due) => (
+                  dueRecords.map((due, index) => (
                     <tr key={due.id}>
+                      <td>{index + 1}</td>
                       <td>{due.companyName}</td>
                       <td>{due.invoiceNumber || due.reference || "N/A"}</td>
-                      <td>{formatElapsedDaysTag(due.invoiceDate)}</td>
+                      <td>{formatElapsedDaysTag(due.billDate || due.invoiceDate)}</td>
+                      <td>{due.overdueDays > 0 ? `${due.overdueDays} days` : "Current"}</td>
                       <td>{formatDate(due.dueDate)}</td>
                       <td>{formatCurrency(due.amount, due.currency)}</td>
                     </tr>
@@ -102,6 +107,7 @@ export default async function DashboardOverview({
             <table>
               <thead>
                 <tr>
+                  <th>No.</th>
                   <th>Channel</th>
                   <th>Recipient</th>
                   <th>Status</th>
@@ -111,11 +117,12 @@ export default async function DashboardOverview({
               <tbody>
                 {reminderLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={4}>No reminder activity yet.</td>
+                    <td colSpan={5}>No reminder activity yet.</td>
                   </tr>
                 ) : (
-                  reminderLogs.map((log) => (
+                  reminderLogs.map((log, index) => (
                     <tr key={log.id}>
+                      <td>{index + 1}</td>
                       <td className="capitalize">{log.channel}</td>
                       <td>{log.recipient}</td>
                       <td className="capitalize">{log.status}</td>

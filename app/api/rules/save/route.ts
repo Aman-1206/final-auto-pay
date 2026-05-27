@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireAdminUser } from "@/lib/auth";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdminUser();
   const formData = await request.formData();
   const ruleId = String(formData.get("ruleId") || "");
   const templateId = String(formData.get("templateId") || "");
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
 
   const payload = {
     name: String(formData.get("name") || "").trim(),
-    daysBeforeDue: Number(formData.get("daysBeforeDue") || 0),
+    triggerDay: Number(formData.get("triggerDay") || 0),
     enabled: formData.get("enabled") === "on",
     autoSend: formData.get("autoSend") === "on",
     channels: {
@@ -26,9 +26,9 @@ export async function POST(request: Request) {
     smsBody: String(formData.get("smsBody") || "").trim()
   };
 
-  if (!payload.name || !payload.daysBeforeDue || !payload.emailSubject) {
+  if (!payload.name || !payload.triggerDay || !payload.emailSubject) {
     return NextResponse.redirect(
-      new URL("/dashboard/rules?error=Please%20fill%20the%20rule%20details.", request.url),
+      new URL("/dashboard/settings?error=Please%20fill%20the%20rule%20details.", request.url),
       { status: 303 }
     );
   }
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 
     if (rule) {
       rule.name = payload.name;
-      rule.daysBeforeDue = payload.daysBeforeDue;
+      rule.triggerDay = payload.triggerDay;
       rule.enabled = payload.enabled;
       rule.autoSend = payload.autoSend;
       rule.channels = payload.channels;
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
         id: finalRuleId,
         ownerId: user.id,
         name: payload.name,
-        daysBeforeDue: payload.daysBeforeDue,
+        triggerDay: payload.triggerDay,
         enabled: payload.enabled,
         autoSend: payload.autoSend,
         channels: payload.channels,
@@ -90,7 +90,7 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.redirect(
-    new URL("/dashboard/rules?message=Reminder%20rule%20saved%20successfully.", request.url),
+    new URL("/dashboard/settings?message=Reminder%20rule%20saved%20successfully.", request.url),
     { status: 303 }
   );
 }
