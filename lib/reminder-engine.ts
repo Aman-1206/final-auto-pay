@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
+import {
+  filterSharedCompanyRecords,
+  getCompanyWorkspaceContext
+} from "@/lib/company-workspace";
 import { findMatchingMasterContact } from "@/lib/contact-matching";
 import {
   isE164PhoneNumber,
@@ -304,31 +308,49 @@ function evaluateCashDiscountEligibility(
 
 export async function getDashboardStats(ownerId: string): Promise<DashboardStats> {
   const database = await readDatabase();
+  const user = database.users.find((entry) => entry.id === ownerId);
+
+  if (!user) {
+    return {
+      masterCount: 0,
+      dueCount: 0,
+      pendingReminders: 0,
+      sentReminders: 0
+    };
+  }
+
+  const workspace = getCompanyWorkspaceContext(database, user.companyName);
+  const reminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds);
 
   return {
-    masterCount: database.masterContacts.filter((entry) => entry.ownerId === ownerId).length,
-    dueCount: database.dueRecords.filter((entry) => entry.ownerId === ownerId).length,
-    pendingReminders: database.reminderLogs.filter(
-      (entry) => entry.ownerId === ownerId && entry.status === "pending"
-    ).length,
-    sentReminders: database.reminderLogs.filter(
-      (entry) =>
-        entry.ownerId === ownerId &&
-        (entry.status === "sent" || entry.status === "simulated")
+    masterCount: filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds).length,
+    dueCount: filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).length,
+    pendingReminders: reminderLogs.filter((entry) => entry.status === "pending").length,
+    sentReminders: reminderLogs.filter(
+      (entry) => entry.status === "sent" || entry.status === "simulated"
     ).length
   };
 }
 
 export async function generateRemindersForUser(ownerId: string, requestedDate?: string) {
   return updateDatabase(async (database) => {
-    const contacts = database.masterContacts.filter((entry) => entry.ownerId === ownerId);
-    const dues = database.dueRecords.filter((entry) => entry.ownerId === ownerId);
-    const rules = database.reminderRules
-      .filter((entry) => entry.ownerId === ownerId && entry.enabled)
-      .sort((left, right) => left.triggerDay - right.triggerDay);
-    const templates = database.templates.filter((entry) => entry.ownerId === ownerId);
-    const policies = database.cashDiscountPolicies.filter((entry) => entry.ownerId === ownerId);
     const user = database.users.find((entry) => entry.id === ownerId);
+    if (!user) {
+      throw new Error("The current user could not be found.");
+    }
+
+    const workspace = getCompanyWorkspaceContext(database, user.companyName);
+    const contacts = filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds);
+    const dues = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds);
+    const rules = database.reminderRules
+      .filter((entry) => entry.ownerId === workspace.configOwnerId && entry.enabled)
+      .sort((left, right) => left.triggerDay - right.triggerDay);
+    const templates = database.templates.filter(
+      (entry) => entry.ownerId === workspace.configOwnerId
+    );
+    const policies = database.cashDiscountPolicies.filter(
+      (entry) => entry.ownerId === workspace.configOwnerId
+    );
     const today = requestedDate ? new Date(requestedDate) : new Date();
     const scheduledFor = new Date(
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
@@ -384,7 +406,7 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
 
           created.push({
             id: randomUUID(),
-            ownerId,
+            ownerId: workspace.workspaceId,
             dueId: due.id,
             dedupeKey,
             contactId: contact.id,
@@ -421,7 +443,9 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
     );
 
     if (autoSendRuleIds.length > 0) {
-      const settings = database.dispatchSettings.find((entry) => entry.ownerId === ownerId);
+      const settings = database.dispatchSettings.find(
+        (entry) => entry.ownerId === workspace.configOwnerId
+      );
 
       if (!settings) {
         throw new Error("Dispatch settings are missing.");
@@ -455,26 +479,36 @@ export async function createManualRemindersForDue(
   channelSelection?: ReminderChannelSelection
 ) {
   return updateDatabase((database) => {
-    const due = database.dueRecords.find((entry) => entry.ownerId === ownerId && entry.id === dueId);
+    const user = database.users.find((entry) => entry.id === ownerId);
+    if (!user) {
+      throw new Error("The current user could not be found.");
+    }
+
+    const workspace = getCompanyWorkspaceContext(database, user.companyName);
+    const due = database.dueRecords.find(
+      (entry) => workspace.sharedOwnerIds.has(entry.ownerId) && entry.id === dueId
+    );
     if (!due) {
       throw new Error("The selected invoice could not be found.");
     }
 
     const contact = findMatchingMasterContact(
       due,
-      database.masterContacts.filter((entry) => entry.ownerId === ownerId)
+      filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds)
     );
     if (!contact) {
       throw new Error("No matching master contact was found for that invoice.");
     }
 
-    const rule = database.reminderRules.find((entry) => entry.ownerId === ownerId && entry.id === ruleId);
+    const rule = database.reminderRules.find(
+      (entry) => entry.ownerId === workspace.configOwnerId && entry.id === ruleId
+    );
     if (!rule) {
       throw new Error("The selected reminder rule could not be found.");
     }
 
     const template = database.templates.find(
-      (entry) => entry.ownerId === ownerId && entry.id === rule.templateId
+      (entry) => entry.ownerId === workspace.configOwnerId && entry.id === rule.templateId
     );
     if (!template) {
       throw new Error("The selected reminder template could not be found.");
@@ -485,16 +519,17 @@ export async function createManualRemindersForDue(
       throw new Error("The selected invoice does not have a valid bill date.");
     }
 
-    const policies = database.cashDiscountPolicies.filter((entry) => entry.ownerId === ownerId);
+    const policies = database.cashDiscountPolicies.filter(
+      (entry) => entry.ownerId === workspace.configOwnerId
+    );
     const cdEvaluation = evaluateCashDiscountEligibility(
       due,
-      database.dueRecords.filter(
-        (entry) => entry.ownerId === ownerId && getDuePartyKey(entry) === getDuePartyKey(due)
+      filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).filter(
+        (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
       ),
       policies,
       new Date()
     );
-    const user = database.users.find((entry) => entry.id === ownerId);
     const scheduledFor = new Date().toISOString();
     const replacements = buildReplacements(
       { due, contact, rule, template, cdEvaluation, billAgeDays },
@@ -510,7 +545,7 @@ export async function createManualRemindersForDue(
 
       created.push({
         id: randomUUID(),
-        ownerId,
+        ownerId: workspace.workspaceId,
         dueId: due.id,
         dedupeKey: `${buildReminderDedupeKey(due, rule, channel)}|manual|${scheduledFor}`,
         contactId: contact.id,
@@ -753,7 +788,15 @@ async function deliverReminder(log: ReminderLog, settings: DispatchSettings) {
 
 export async function sendPendingReminders(ownerId: string, ruleIds?: string[], logIds?: string[]) {
   return updateDatabase(async (database) => {
-    const settings = database.dispatchSettings.find((entry) => entry.ownerId === ownerId);
+    const user = database.users.find((entry) => entry.id === ownerId);
+    if (!user) {
+      throw new Error("The current user could not be found.");
+    }
+
+    const workspace = getCompanyWorkspaceContext(database, user.companyName);
+    const settings = database.dispatchSettings.find(
+      (entry) => entry.ownerId === workspace.configOwnerId
+    );
     if (!settings) {
       throw new Error("Dispatch settings are missing.");
     }
@@ -761,7 +804,7 @@ export async function sendPendingReminders(ownerId: string, ruleIds?: string[], 
 
     const logs = database.reminderLogs.filter(
       (entry) =>
-        entry.ownerId === ownerId &&
+        workspace.sharedOwnerIds.has(entry.ownerId) &&
         entry.status === "pending" &&
         (!ruleIds || ruleIds.includes(entry.ruleId)) &&
         (!logIds || logIds.includes(entry.id))

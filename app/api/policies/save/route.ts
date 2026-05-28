@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
@@ -25,8 +26,9 @@ export async function POST(request: Request) {
   }
 
   await updateDatabase((database) => {
+    const workspace = getCompanyWorkspaceContextForUser(database, user);
     const existing = database.cashDiscountPolicies.find(
-      (entry) => entry.id === policyId && entry.ownerId === user.id
+      (entry) => entry.id === policyId && entry.ownerId === workspace.configOwnerId
     );
 
     if (existing) {
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
 
     database.cashDiscountPolicies.push({
       id: randomUUID(),
-      ownerId: user.id,
+      ownerId: workspace.configOwnerId,
       name: payload.name,
       paymentWindowDays: payload.paymentWindowDays,
       discountPercent: payload.discountPercent,

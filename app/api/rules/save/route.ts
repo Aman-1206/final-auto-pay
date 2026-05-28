@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
@@ -34,11 +35,12 @@ export async function POST(request: Request) {
   }
 
   await updateDatabase((database) => {
+    const workspace = getCompanyWorkspaceContextForUser(database, user);
     const finalRuleId = ruleId || randomUUID();
     const finalTemplateId = templateId || randomUUID();
 
     const rule = database.reminderRules.find(
-      (entry) => entry.id === finalRuleId && entry.ownerId === user.id
+      (entry) => entry.id === finalRuleId && entry.ownerId === workspace.configOwnerId
     );
 
     if (rule) {
@@ -51,7 +53,7 @@ export async function POST(request: Request) {
     } else {
       database.reminderRules.push({
         id: finalRuleId,
-        ownerId: user.id,
+        ownerId: workspace.configOwnerId,
         name: payload.name,
         triggerDay: payload.triggerDay,
         enabled: payload.enabled,
@@ -64,7 +66,7 @@ export async function POST(request: Request) {
     }
 
     const template = database.templates.find(
-      (entry) => entry.id === finalTemplateId && entry.ownerId === user.id
+      (entry) => entry.id === finalTemplateId && entry.ownerId === workspace.configOwnerId
     );
 
     if (template) {
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
     } else {
       database.templates.push({
         id: finalTemplateId,
-        ownerId: user.id,
+        ownerId: workspace.configOwnerId,
         ruleId: finalRuleId,
         name: payload.name,
         emailSubject: payload.emailSubject,

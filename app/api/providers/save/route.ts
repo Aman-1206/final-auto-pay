@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
@@ -7,9 +8,12 @@ export async function POST(request: Request) {
   const formData = await request.formData();
 
   await updateDatabase((database) => {
-    const existing = database.dispatchSettings.find((entry) => entry.ownerId === user.id);
+    const workspace = getCompanyWorkspaceContextForUser(database, user);
+    const existing = database.dispatchSettings.find(
+      (entry) => entry.ownerId === workspace.configOwnerId
+    );
     const nextValues = {
-      ownerId: user.id,
+      ownerId: workspace.configOwnerId,
       simulateMode: formData.get("simulateMode") === "on",
       smtpHost: String(formData.get("smtpHost") || "").trim(),
       smtpPort: Number(formData.get("smtpPort") || 587),

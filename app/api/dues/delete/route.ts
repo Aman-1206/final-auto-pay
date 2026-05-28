@@ -1,17 +1,22 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { getCompanyWorkspaceContext, getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { deleteStoredWorkbook } from "@/lib/excel";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
   const user = await requireUser();
+  const workspaceId = getCompanyWorkspaceId(user.companyName);
 
   try {
-    await deleteStoredWorkbook(user.id, "due");
+    await deleteStoredWorkbook(workspaceId, "due");
 
     await updateDatabase((database) => {
-      database.dueRecords = database.dueRecords.filter((entry) => entry.ownerId !== user.id);
-      database.reminderLogs = database.reminderLogs.filter((entry) => entry.ownerId !== user.id);
+      const { sharedOwnerIds } = getCompanyWorkspaceContext(database, user.companyName);
+      database.dueRecords = database.dueRecords.filter((entry) => !sharedOwnerIds.has(entry.ownerId));
+      database.reminderLogs = database.reminderLogs.filter(
+        (entry) => !sharedOwnerIds.has(entry.ownerId)
+      );
     });
 
     return NextResponse.redirect(

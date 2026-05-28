@@ -90,11 +90,13 @@ export async function registerUser(input: {
 
     database.users.push(user);
 
-    const defaults = createDefaultRuleSet(user.id);
-    database.reminderRules.push(...defaults.rules);
-    database.templates.push(...defaults.templates);
-    database.dispatchSettings.push(defaults.dispatchSettings);
-    database.cashDiscountPolicies.push(...defaults.cashDiscountPolicies);
+    if (role === "admin") {
+      const defaults = createDefaultRuleSet(user.id);
+      database.reminderRules.push(...defaults.rules);
+      database.templates.push(...defaults.templates);
+      database.dispatchSettings.push(defaults.dispatchSettings);
+      database.cashDiscountPolicies.push(...defaults.cashDiscountPolicies);
+    }
 
     return user;
   });

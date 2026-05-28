@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireAdminUser } from "@/lib/auth";
+import { getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { ensureStoredMasterWorkbook, syncStoredMasterWorkbook } from "@/lib/workbook-sync";
 
 export async function POST(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdminUser();
+  const workspaceId = getCompanyWorkspaceId(user.companyName);
 
   try {
-    await ensureStoredMasterWorkbook(user.id);
-    const result = await syncStoredMasterWorkbook(user.id);
+    await ensureStoredMasterWorkbook(workspaceId, user.companyName);
+    const result = await syncStoredMasterWorkbook(workspaceId, user.companyName);
 
     return NextResponse.redirect(
       new URL(

@@ -1,4 +1,5 @@
 import { DashboardShell } from "@/components/dashboard-shell";
+import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { getDashboardStats } from "@/lib/reminder-engine";
 import { readDatabase } from "@/lib/storage";
@@ -15,13 +16,12 @@ export default async function DashboardOverview({
     readDatabase(),
     searchParams
   ]);
+  const workspace = getCompanyWorkspaceContextForUser(database, user);
 
-  const dueRecords = database.dueRecords
-    .filter((entry) => entry.ownerId === user.id)
+  const dueRecords = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate))
     .slice(0, 5);
-  const reminderLogs = database.reminderLogs
-    .filter((entry) => entry.ownerId === user.id)
+  const reminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 6);
 

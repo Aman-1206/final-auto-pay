@@ -1,15 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { readStoredWorkbookRows } from "@/lib/excel";
 import { ensureStoredDueWorkbook } from "@/lib/workbook-sync";
 
 export async function GET(request: Request) {
   const user = await requireUser();
+  const workspaceId = getCompanyWorkspaceId(user.companyName);
 
   try {
-    await ensureStoredDueWorkbook(user.id);
-    const { filePath } = await readStoredWorkbookRows(user.id, "due");
+    await ensureStoredDueWorkbook(workspaceId, user.companyName);
+    const { filePath } = await readStoredWorkbookRows(workspaceId, "due");
     const buffer = await readFile(filePath);
 
     return new NextResponse(buffer, {

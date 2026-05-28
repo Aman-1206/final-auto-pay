@@ -4,6 +4,7 @@ import {
   readStoredWorkbookRows,
   writeStoredWorkbookRows
 } from "@/lib/excel";
+import { filterSharedCompanyRecords, getCompanyWorkspaceContext } from "@/lib/company-workspace";
 import { buildDueContactMatch } from "@/lib/contact-matching";
 import { readDatabase, updateDatabase } from "@/lib/storage";
 import type { DueRecord, MasterContact } from "@/lib/types";
@@ -92,9 +93,9 @@ function buildDueWorkbookRow(record: DueRecord) {
   });
 }
 
-export async function ensureStoredMasterWorkbook(ownerId: string) {
+export async function ensureStoredMasterWorkbook(workspaceId: string, companyName: string) {
   try {
-    const { rows } = await readStoredWorkbookRows(ownerId, "master");
+    const { rows } = await readStoredWorkbookRows(workspaceId, "master");
     const hasDuplicateManagedHeaders = rows.some((row) =>
       rowHasManagedHeaderDuplicates(row, masterManagedHeaders)
     );
@@ -111,21 +112,22 @@ export async function ensureStoredMasterWorkbook(ownerId: string) {
   }
 
   const database = await readDatabase();
-  const records = database.masterContacts.filter((entry) => entry.ownerId === ownerId);
+  const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+  const records = filterSharedCompanyRecords(database.masterContacts, sharedOwnerIds);
 
   if (records.length === 0) {
     return { restored: false, rowCount: 0 };
   }
 
   const rows = records.map(buildMasterWorkbookRow);
-  await writeStoredWorkbookRows(ownerId, "master", rows);
+  await writeStoredWorkbookRows(workspaceId, "master", rows);
 
   return { restored: true, rowCount: rows.length };
 }
 
-export async function ensureStoredDueWorkbook(ownerId: string) {
+export async function ensureStoredDueWorkbook(workspaceId: string, companyName: string) {
   try {
-    const { rows } = await readStoredWorkbookRows(ownerId, "due");
+    const { rows } = await readStoredWorkbookRows(workspaceId, "due");
     const hasDuplicateManagedHeaders = rows.some((row) =>
       rowHasManagedHeaderDuplicates(row, dueManagedHeaders)
     );
@@ -142,21 +144,22 @@ export async function ensureStoredDueWorkbook(ownerId: string) {
   }
 
   const database = await readDatabase();
-  const records = database.dueRecords.filter((entry) => entry.ownerId === ownerId);
+  const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+  const records = filterSharedCompanyRecords(database.dueRecords, sharedOwnerIds);
 
   if (records.length === 0) {
     return { restored: false, rowCount: 0 };
   }
 
   const rows = records.map(buildDueWorkbookRow);
-  await writeStoredWorkbookRows(ownerId, "due", rows);
+  await writeStoredWorkbookRows(workspaceId, "due", rows);
 
   return { restored: true, rowCount: rows.length };
 }
 
-export async function syncStoredMasterWorkbook(ownerId: string) {
-  const { rows } = await readStoredWorkbookRows(ownerId, "master");
-  const records = mapMasterRows(rows, ownerId);
+export async function syncStoredMasterWorkbook(workspaceId: string, companyName: string) {
+  const { rows } = await readStoredWorkbookRows(workspaceId, "master");
+  const records = mapMasterRows(rows, workspaceId);
 
   if (records.length === 0) {
     throw new Error(
@@ -165,10 +168,13 @@ export async function syncStoredMasterWorkbook(ownerId: string) {
   }
 
   await updateDatabase((database) => {
-    database.masterContacts = database.masterContacts.filter((entry) => entry.ownerId !== ownerId);
+    const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+    database.masterContacts = database.masterContacts.filter(
+      (entry) => !sharedOwnerIds.has(entry.ownerId)
+    );
     database.masterContacts.push(...records);
     database.dueRecords = database.dueRecords.map((entry) => {
-      if (entry.ownerId !== ownerId) {
+      if (!sharedOwnerIds.has(entry.ownerId)) {
         return entry;
       }
 
@@ -187,7 +193,7 @@ export async function syncStoredMasterWorkbook(ownerId: string) {
     database.reminderLogs = database.reminderLogs.filter(
       (entry) =>
         !(
-          entry.ownerId === ownerId &&
+          sharedOwnerIds.has(entry.ownerId) &&
           (entry.status === "pending" || entry.status === "failed")
         )
     );
@@ -198,11 +204,12 @@ export async function syncStoredMasterWorkbook(ownerId: string) {
   };
 }
 
-export async function syncStoredDueWorkbook(ownerId: string) {
-  const { rows } = await readStoredWorkbookRows(ownerId, "due");
+export async function syncStoredDueWorkbook(workspaceId: string, companyName: string) {
+  const { rows } = await readStoredWorkbookRows(workspaceId, "due");
   const database = await readDatabase();
-  const contacts = database.masterContacts.filter((entry) => entry.ownerId === ownerId);
-  const records = mapDueRows(rows, ownerId, contacts);
+  const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+  const contacts = filterSharedCompanyRecords(database.masterContacts, sharedOwnerIds);
+  const records = mapDueRows(rows, workspaceId, contacts);
 
   if (records.length === 0) {
     throw new Error(
@@ -211,12 +218,15 @@ export async function syncStoredDueWorkbook(ownerId: string) {
   }
 
   await updateDatabase((database) => {
-    database.dueRecords = database.dueRecords.filter((entry) => entry.ownerId !== ownerId);
+    const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+    database.dueRecords = database.dueRecords.filter(
+      (entry) => !sharedOwnerIds.has(entry.ownerId)
+    );
     database.dueRecords.push(...records);
     database.reminderLogs = database.reminderLogs.filter(
       (entry) =>
         !(
-          entry.ownerId === ownerId &&
+          sharedOwnerIds.has(entry.ownerId) &&
           (entry.status === "pending" || entry.status === "failed")
         )
     );

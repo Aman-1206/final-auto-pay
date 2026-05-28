@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
+import { requireAdminUser } from "@/lib/auth";
+import { getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { parseWorkbook, readStoredWorkbookRows, writeStoredWorkbookRows } from "@/lib/excel";
 import { syncStoredMasterWorkbook } from "@/lib/workbook-sync";
 
 export async function POST(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdminUser();
+  const workspaceId = getCompanyWorkspaceId(user.companyName);
   const formData = await request.formData();
   const file = formData.get("file");
   const mode = String(formData.get("mode") || "replace");
@@ -21,18 +23,18 @@ export async function POST(request: Request) {
     const rows = parseWorkbook(buffer, "master");
     const existingRows =
       mode === "append"
-        ? await readStoredWorkbookRows(user.id, "master")
+        ? await readStoredWorkbookRows(workspaceId, "master")
             .then((result) => result.rows)
             .catch(() => [])
         : [];
 
     await writeStoredWorkbookRows(
-      user.id,
+      workspaceId,
       "master",
       mode === "append" ? [...existingRows, ...rows] : rows
     );
 
-    const result = await syncStoredMasterWorkbook(user.id);
+    const result = await syncStoredMasterWorkbook(workspaceId, user.companyName);
 
     return NextResponse.redirect(
       new URL(

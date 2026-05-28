@@ -1,5 +1,6 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
 import { ensureStoredMasterWorkbook } from "@/lib/workbook-sync";
@@ -12,72 +13,86 @@ export default async function MasterDatabasePage({
 }) {
   const user = await requireUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
-  const contacts = database.masterContacts.filter((entry) => entry.ownerId === user.id);
+  const workspace = getCompanyWorkspaceContextForUser(database, user);
+  const contacts = filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds);
+  const isAdmin = isAdminUser(user);
 
   if (contacts.length > 0) {
-    await ensureStoredMasterWorkbook(user.id);
+    await ensureStoredMasterWorkbook(workspace.workspaceId, user.companyName);
   }
 
   return (
     <DashboardShell
       title="Master contact database"
-      description="Upload your long-lived company contact sheet and keep payment contacts ready for matching."
+      description="Keep one shared company contact sheet ready for due matching and reminder dispatch."
       companyName={user.companyName}
       userName={user.name}
-      isAdmin={isAdminUser(user)}
+      isAdmin={isAdmin}
     >
       <StatusBar params={params} />
 
       <section className="content-grid">
-        <article className="glass-panel">
-          <div className="section-heading">
-            <h2>Upload master Excel</h2>
-            <p>
-              Recommended headers: Dealer Code, Company Name, Contact Person, Email, WhatsApp,
-              Phone.
-            </p>
-          </div>
+        {isAdmin ? (
+          <article className="glass-panel">
+            <div className="section-heading">
+              <h2>Upload master Excel</h2>
+              <p>
+                Recommended headers: Dealer Code, Company Name, Contact Person, Email, WhatsApp,
+                Phone. This shared master database is managed only by admins.
+              </p>
+            </div>
 
-          <form
-            action="/api/master/upload"
-            method="post"
-            encType="multipart/form-data"
-            className="form-stack"
-          >
-            <label className="field">
-              <span>Upload file</span>
-              <input name="file" type="file" accept=".xlsx,.xlxs,.xls,.csv" required />
-            </label>
+            <form
+              action="/api/master/upload"
+              method="post"
+              encType="multipart/form-data"
+              className="form-stack"
+            >
+              <label className="field">
+                <span>Upload file</span>
+                <input name="file" type="file" accept=".xlsx,.xlxs,.xls,.csv" required />
+              </label>
 
-            <label className="field">
-              <span>Import mode</span>
-              <select name="mode" defaultValue="replace">
-                <option value="replace">Replace existing master records</option>
-                <option value="append">Append to existing master records</option>
-              </select>
-            </label>
+              <label className="field">
+                <span>Import mode</span>
+                <select name="mode" defaultValue="replace">
+                  <option value="replace">Replace existing master records</option>
+                  <option value="append">Append to existing master records</option>
+                </select>
+              </label>
 
-            <button className="button" type="submit">
-              Save master database
-            </button>
-          </form>
-
-          {contacts.length > 0 ? (
-            <form action="/api/master/delete" method="post" className="compact-form">
-              <ConfirmSubmitButton
-                className="button button-danger"
-                confirmationMessage="Delete the current master workbook and all synced contact records for this workspace?"
-              >
-                Delete current master file
-              </ConfirmSubmitButton>
+              <button className="button" type="submit">
+                Save master database
+              </button>
             </form>
-          ) : null}
-        </article>
+
+            {contacts.length > 0 ? (
+              <form action="/api/master/delete" method="post" className="compact-form">
+                <ConfirmSubmitButton
+                  className="button button-danger"
+                  confirmationMessage="Delete the current shared master workbook and all synced contact records for this company workspace?"
+                >
+                  Delete current master file
+                </ConfirmSubmitButton>
+              </form>
+            ) : null}
+          </article>
+        ) : (
+          <article className="glass-panel">
+            <div className="section-heading">
+              <h2>Admin-managed master database</h2>
+              <p>
+                Master contact uploads are restricted to admins. You can still view the shared
+                company contacts below.
+              </p>
+            </div>
+          </article>
+        )}
 
         <article className="glass-panel">
           <div className="section-heading">
             <h2>Current contacts</h2>
-            <p>{contacts.length} records available for reminder matching.</p>
+            <p>{contacts.length} shared records available for reminder matching.</p>
           </div>
 
           <div className="table-wrap">
@@ -96,7 +111,11 @@ export default async function MasterDatabasePage({
               <tbody>
                 {contacts.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>Upload a master file to populate contacts.</td>
+                    <td colSpan={7}>
+                      {isAdmin
+                        ? "Upload a master file to populate contacts."
+                        : "An admin needs to upload a master file to populate shared contacts."}
+                    </td>
                   </tr>
                 ) : (
                   contacts.slice(0, 20).map((contact, index) => (
@@ -120,40 +139,50 @@ export default async function MasterDatabasePage({
           <div className="section-heading">
             <h2>Edit outside the app</h2>
             <p>
-              The row-by-row workbook editor has been removed. Download the current file, edit it
-              in Excel or Google Sheets, then upload it back here when you are ready.
+              {isAdmin
+                ? "The row-by-row workbook editor has been removed. Download the current file, edit it in Excel or Google Sheets, then upload it back here when you are ready."
+                : "Admins can download the current shared file, edit it in Excel or Google Sheets, then upload it back when updates are ready."}
             </p>
           </div>
 
           {contacts.length === 0 ? (
             <p className="muted-copy">
-              Upload a master file first, then you can download it, edit it outside the app, and
-              re-upload the updated version.
+              {isAdmin
+                ? "Upload a master file first, then you can download it, edit it outside the app, and re-upload the updated version."
+                : "Ask an admin to upload the first master file before this shared workbook can be managed."}
             </p>
           ) : (
             <div className="stacked-layout">
-              <p className="muted-copy">
-                If you want browser editing, import the downloaded file into Google Sheets, make
-                your changes there, then export it again as `.xlsx` or `.csv` and upload it here
-                using replace mode.
-              </p>
+              {isAdmin ? (
+                <>
+                  <p className="muted-copy">
+                    If you want browser editing, import the downloaded file into Google Sheets,
+                    make your changes there, then export it again as `.xlsx` or `.csv` and upload
+                    it here using replace mode.
+                  </p>
 
-              <div className="button-row">
-                <a className="button button-secondary" href="/api/master/download">
-                  Download current master file
-                </a>
+                  <div className="button-row">
+                    <a className="button button-secondary" href="/api/master/download">
+                      Download current master file
+                    </a>
 
-                <form action="/api/master/refresh" method="post">
-                  <button className="button button-secondary" type="submit">
-                    Refresh from stored file
-                  </button>
-                </form>
-              </div>
+                    <form action="/api/master/refresh" method="post">
+                      <button className="button button-secondary" type="submit">
+                        Refresh from stored file
+                      </button>
+                    </form>
+                  </div>
 
-              <p className="muted-copy">
-                Use `Replace existing master records` when re-uploading your edited file so the app
-                fully re-syncs the latest version.
-              </p>
+                  <p className="muted-copy">
+                    Use `Replace existing master records` when re-uploading your edited file so the
+                    app fully re-syncs the latest version.
+                  </p>
+                </>
+              ) : (
+                <p className="muted-copy">
+                  Contact your admin if this shared master database needs downloading or updating.
+                </p>
+              )}
             </div>
           )}
         </article>

@@ -1,5 +1,9 @@
 import { DashboardShell } from "@/components/dashboard-shell";
 import { requireAdminUser } from "@/lib/auth";
+import {
+  filterSharedCompanyRecords,
+  getCompanyWorkspaceContextForUser
+} from "@/lib/company-workspace";
 import { resolveDispatchSettings } from "@/lib/dispatch-settings";
 import { readDatabase } from "@/lib/storage";
 import { formatDate } from "@/lib/utils";
@@ -102,15 +106,18 @@ export default async function AdminDashboardPage({
 }) {
   const user = await requireAdminUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
+  const workspace = getCompanyWorkspaceContextForUser(database, user);
   const settings = resolveDispatchSettings(
-    database.dispatchSettings.find((entry) => entry.ownerId === user.id) ?? { ownerId: user.id }
+    database.dispatchSettings.find((entry) => entry.ownerId === workspace.configOwnerId) ?? {
+      ownerId: workspace.configOwnerId
+    }
   );
   const rules = database.reminderRules
-    .filter((entry) => entry.ownerId === user.id)
+    .filter((entry) => entry.ownerId === workspace.configOwnerId)
     .sort((left, right) => left.triggerDay - right.triggerDay);
-  const templates = database.templates.filter((entry) => entry.ownerId === user.id);
+  const templates = database.templates.filter((entry) => entry.ownerId === workspace.configOwnerId);
   const policies = database.cashDiscountPolicies
-    .filter((entry) => entry.ownerId === user.id)
+    .filter((entry) => entry.ownerId === workspace.configOwnerId)
     .sort((left, right) => left.paymentWindowDays - right.paymentWindowDays);
   const selectedActivityDayInput = getQueryValue(params.activityDay);
   const selectedActivityDay = /^\d{4}-\d{2}-\d{2}$/.test(selectedActivityDayInput)
@@ -119,16 +126,22 @@ export default async function AdminDashboardPage({
   const now = Date.now();
   const usersById = new Map(database.users.map((entry) => [entry.id, entry]));
   const activeSessions = database.sessions
-    .filter((entry) => new Date(entry.expiresAt).getTime() > now)
+    .filter(
+      (entry) =>
+        new Date(entry.expiresAt).getTime() > now &&
+        workspace.companyUsers.some((userEntry) => userEntry.id === entry.userId)
+    )
     .map((entry) => ({
       ...entry,
       user: usersById.get(entry.userId) ?? null
     }))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  const authEvents = [...database.authEvents]
+  const companyUserIds = new Set(workspace.companyUsers.map((entry) => entry.id));
+  const authEvents = database.authEvents
+    .filter((entry) => companyUserIds.has(entry.userId))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 40);
-  const allReminderLogs = [...database.reminderLogs].sort(
+  const allReminderLogs = [...filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)].sort(
     (left, right) =>
       getReminderActivityTimestamp(right).localeCompare(getReminderActivityTimestamp(left))
   );
@@ -214,7 +227,7 @@ export default async function AdminDashboardPage({
         </article>
         <article className="stat-card glass-panel">
           <span className="stat-label">Users</span>
-          <strong>{database.users.length}</strong>
+          <strong>{workspace.companyUsers.length}</strong>
         </article>
         <article className="stat-card glass-panel">
           <span className="stat-label">Reminder Sends</span>

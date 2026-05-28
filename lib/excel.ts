@@ -548,8 +548,21 @@ export function parseWorkbook(buffer: Buffer, kind: ImportKind) {
   return sheetToRows(worksheet, kind, headerRowIndex) as RawRow[];
 }
 
+function getWorkbookDirectoryName(ownerId: string) {
+  const encodedOwnerId = encodeURIComponent(ownerId || "workspace").replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+
+  if (encodedOwnerId === "." || encodedOwnerId === "..") {
+    return encodedOwnerId.replace(/\./g, "%2E");
+  }
+
+  return encodedOwnerId;
+}
+
 function getWorkbookDirectory(ownerId: string) {
-  return path.join(process.cwd(), "data", "workbooks", ownerId);
+  return path.join(process.cwd(), "data", "workbooks", getWorkbookDirectoryName(ownerId));
 }
 
 export function getStoredWorkbookPath(ownerId: string, kind: ImportKind) {

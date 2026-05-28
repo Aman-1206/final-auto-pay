@@ -1,5 +1,9 @@
 import { DashboardShell } from "@/components/dashboard-shell";
 import { findMatchingMasterContact } from "@/lib/contact-matching";
+import {
+  filterSharedCompanyRecords,
+  getCompanyWorkspaceContextForUser
+} from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { resolveDispatchSettings } from "@/lib/dispatch-settings";
 import { readDatabase } from "@/lib/storage";
@@ -14,25 +18,26 @@ export default async function DispatchPage({
   const user = await requireUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
   const isAdmin = isAdminUser(user);
+  const workspace = getCompanyWorkspaceContextForUser(database, user);
 
   const settings = resolveDispatchSettings(
-    database.dispatchSettings.find((entry) => entry.ownerId === user.id) ?? { ownerId: user.id }
+    database.dispatchSettings.find((entry) => entry.ownerId === workspace.configOwnerId) ?? {
+      ownerId: workspace.configOwnerId
+    }
   );
-  const masterContacts = database.masterContacts.filter((entry) => entry.ownerId === user.id);
-  const dueRecords = database.dueRecords
-    .filter((entry) => entry.ownerId === user.id)
+  const masterContacts = filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds);
+  const dueRecords = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate));
   const sendableDueRecords = dueRecords.filter((entry) =>
     Boolean(findMatchingMasterContact(entry, masterContacts))
   );
   const unmatchedDueCount = dueRecords.length - sendableDueRecords.length;
   const rules = database.reminderRules
-    .filter((entry) => entry.ownerId === user.id)
+    .filter((entry) => entry.ownerId === workspace.configOwnerId)
     .sort((left, right) => left.triggerDay - right.triggerDay);
   const dueRecordMap = new Map(dueRecords.map((entry) => [entry.id, entry]));
   const ruleMap = new Map(rules.map((entry) => [entry.id, entry]));
-  const allReminderLogs = database.reminderLogs
-    .filter((entry) => entry.ownerId === user.id)
+  const allReminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const reminderLogs = allReminderLogs;
   const pendingCount = allReminderLogs.filter((entry) => entry.status === "pending").length;

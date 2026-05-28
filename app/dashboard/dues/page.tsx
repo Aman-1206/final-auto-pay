@@ -1,5 +1,6 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import Link from "next/link";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
@@ -13,16 +14,17 @@ export default async function DuesPage({
 }) {
   const user = await requireUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
-  const dueRecords = database.dueRecords.filter((entry) => entry.ownerId === user.id);
+  const workspace = getCompanyWorkspaceContextForUser(database, user);
+  const dueRecords = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds);
 
   if (dueRecords.length > 0) {
-    await ensureStoredDueWorkbook(user.id);
+    await ensureStoredDueWorkbook(workspace.workspaceId, user.companyName);
   }
 
   return (
     <DashboardShell
       title="Dues upload workspace"
-      description="Upload your latest dues sheet, keep it in sync with master contacts, then choose when to generate and send reminders."
+      description="Upload your latest dues sheet once for the whole company, keep it in sync with master contacts, then choose when to generate and send reminders."
       companyName={user.companyName}
       userName={user.name}
       isAdmin={isAdminUser(user)}
@@ -37,7 +39,8 @@ export default async function DuesPage({
               Recommended headers for your latest sheet: Date, Ref. No., Party&apos;s Name,
               Opening Amount, Pending Amount, Due on, and Overdue by days. Dealer code is now
               optional in dues imports, so party names can still be matched with the master
-              database when the code is missing.
+              database when the code is missing. This upload is shared across all users and admins
+              in your company workspace.
             </p>
           </div>
 
@@ -69,7 +72,7 @@ export default async function DuesPage({
             <form action="/api/dues/delete" method="post" className="compact-form">
               <ConfirmSubmitButton
                 className="button button-danger"
-                confirmationMessage="Delete the current due workbook and all synced due records for this workspace?"
+                confirmationMessage="Delete the current shared due workbook and all synced due records for this company workspace?"
               >
                 Delete current due file
               </ConfirmSubmitButton>
@@ -110,7 +113,7 @@ export default async function DuesPage({
         <article className="glass-panel">
           <div className="section-heading">
             <h2>Latest dues preview</h2>
-            <p>{dueRecords.length} records currently active in the dues list.</p>
+            <p>{dueRecords.length} shared records currently active in the dues list.</p>
           </div>
 
           <div className="table-wrap">
