@@ -36,6 +36,7 @@ type ReminderContext = {
   template: ReminderTemplate;
   cdEvaluation: CashDiscountEvaluation;
   billAgeDays: number;
+  paymentSummary: PaymentSummary;
 };
 
 type ReminderChannelSelection = Partial<Record<ReminderLog["channel"], boolean>>;
@@ -46,6 +47,22 @@ type CashDiscountEvaluation = {
   policy: CashDiscountPolicy | null;
   reason: string;
 };
+
+type PaymentSummary = {
+  currentInvoiceDue: number;
+  previousDue: number;
+  totalDue: number;
+  previousDues: DueRecord[];
+};
+
+function escapeHtml(value: string | number) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function buildReminderDedupeKey(
   due: DueRecord,
@@ -101,11 +118,54 @@ function buildCashDiscountShortMessage(evaluation: CashDiscountEvaluation) {
   return `${prefix} we are giving you CD of ${evaluation.policy.discountPercent}% if paid within ${evaluation.policy.paymentWindowDays} days.`;
 }
 
-function buildReplacements(context: ReminderContext, senderCompany: string) {
-  const billDate = context.due.billDate || context.due.invoiceDate;
+function getOlderUnpaidDues(due: DueRecord, allDuesForDealer: DueRecord[]) {
+  const currentBillDate = new Date(due.billDate || due.invoiceDate || "");
+
+  return allDuesForDealer
+    .filter((entry) => entry.id !== due.id && entry.amount > 0)
+    .filter((entry) => {
+      const otherBillDate = new Date(entry.billDate || entry.invoiceDate || "");
+
+      if (Number.isNaN(otherBillDate.getTime())) {
+        return false;
+      }
+
+      if (Number.isNaN(currentBillDate.getTime())) {
+        return true;
+      }
+
+      return otherBillDate.getTime() < currentBillDate.getTime();
+    })
+    .sort((left, right) => (left.billDate || left.invoiceDate).localeCompare(right.billDate || right.invoiceDate));
+}
+
+function buildPaymentSummary(due: DueRecord, allDuesForDealer: DueRecord[]): PaymentSummary {
+  const previousDues = getOlderUnpaidDues(due, allDuesForDealer);
+  const previousDue = previousDues.reduce((sum, entry) => sum + entry.amount, 0);
+  const currentInvoiceDue = due.amount;
 
   return {
-    amount: formatCurrency(context.due.amount, context.due.currency),
+    currentInvoiceDue,
+    previousDue,
+    totalDue: currentInvoiceDue + previousDue,
+    previousDues
+  };
+}
+
+function buildReplacements(context: ReminderContext, senderCompany: string) {
+  const billDate = context.due.billDate || context.due.invoiceDate;
+  const invoiceAmount = formatCurrency(context.due.amount, context.due.currency);
+  const currentInvoiceDueAmount = formatCurrency(
+    context.paymentSummary.currentInvoiceDue,
+    context.due.currency
+  );
+  const previousDueAmount = formatCurrency(context.paymentSummary.previousDue, context.due.currency);
+  const totalDueAmount = formatCurrency(context.paymentSummary.totalDue, context.due.currency);
+  const invoiceNumber = context.due.invoiceNumber || context.due.reference || "N/A";
+  const dueDate = context.due.dueDate ? formatDate(context.due.dueDate) : "Not available";
+
+  return {
+    amount: invoiceAmount,
     billAgeDays: context.billAgeDays,
     billDate: formatDate(billDate),
     companyBillKey: getDuePartyKey(context.due),
@@ -118,20 +178,32 @@ function buildReplacements(context: ReminderContext, senderCompany: string) {
     cdShortSummary: buildCashDiscountShortSummary(context.cdEvaluation),
     cdSummary: buildCashDiscountSummary(context.cdEvaluation),
     companyName: context.due.companyName,
+    company_name: context.due.companyName,
     contactName:
       context.contact.primaryContact ||
       context.due.matchedContactName ||
       "Accounts Team",
+    currentInvoiceDueAmount,
+    current_invoice_due_amount: currentInvoiceDueAmount,
     daysBeforeDue: context.rule.triggerDay,
+    dealer_name: context.due.companyName,
     dealerCode: context.due.dealerCode || context.due.customerCode,
-    dueDate: context.due.dueDate ? formatDate(context.due.dueDate) : "Not available",
-    invoiceNumber: context.due.invoiceNumber || context.due.reference || "N/A",
+    dueDate,
+    due_date: dueDate,
+    invoiceAmount,
+    invoice_amount: invoiceAmount,
+    invoiceNumber,
+    invoice_no: invoiceNumber,
     openingAmount: formatCurrency(context.due.openingAmount, context.due.currency),
     overdueDays: context.due.overdueDays,
+    previousDueAmount,
+    previous_due_amount: previousDueAmount,
     pendingAmount: formatCurrency(context.due.amount, context.due.currency),
     reference: context.due.reference || context.due.invoiceNumber || "N/A",
     reminderDay: context.rule.triggerDay,
-    senderCompany
+    senderCompany,
+    totalDueAmount,
+    total_due_amount: totalDueAmount
   };
 }
 
@@ -209,30 +281,170 @@ function templateIncludesCashDiscountToken(template: string) {
   );
 }
 
+function templateIncludesPaymentSummaryToken(template: string) {
+  return /\{\{\s*(?:currentInvoiceDueAmount|current_invoice_due_amount|previousDueAmount|previous_due_amount)\s*\}\}/i.test(
+    template
+  );
+}
+
 function composeReminderContent(
   channel: ReminderLog["channel"],
   template: string,
   replacements: Record<string, string | number>,
-  evaluation: CashDiscountEvaluation
+  evaluation: CashDiscountEvaluation,
+  paymentSummary: PaymentSummary,
+  currency: string
 ) {
-  const filledTemplate = fillTemplate(template, replacements).trim();
+  let filledTemplate = fillTemplate(template, replacements).trim();
 
-  if (templateIncludesCashDiscountToken(template) || !evaluation.eligible) {
-    return filledTemplate;
+  if (!templateIncludesCashDiscountToken(template) && evaluation.eligible) {
+    const appendedCashDiscountMessage =
+      channel === "email"
+        ? buildCashDiscountMessage(evaluation)
+        : buildCashDiscountShortMessage(evaluation);
+
+    if (appendedCashDiscountMessage) {
+      filledTemplate =
+        channel === "email"
+          ? `${filledTemplate}\n\n${appendedCashDiscountMessage}`.trim()
+          : `${filledTemplate} ${appendedCashDiscountMessage}`.trim();
+    }
   }
 
-  const appendedCashDiscountMessage =
-    channel === "email"
-      ? buildCashDiscountMessage(evaluation)
-      : buildCashDiscountShortMessage(evaluation);
+  if (!templateIncludesPaymentSummaryToken(template)) {
+    const paymentSummaryText =
+      channel === "email"
+        ? [
+            "",
+            "Payment Summary:",
+            `Current invoice due: ${formatCurrency(paymentSummary.currentInvoiceDue, currency)}`,
+            `Previous due: ${formatCurrency(paymentSummary.previousDue, currency)}`,
+            `Total due: ${formatCurrency(paymentSummary.totalDue, currency)}`
+          ].join("\n")
+        : ` Current invoice due: ${formatCurrency(paymentSummary.currentInvoiceDue, currency)}. Previous due: ${formatCurrency(paymentSummary.previousDue, currency)}. Total due: ${formatCurrency(paymentSummary.totalDue, currency)}.`;
 
-  if (!appendedCashDiscountMessage) {
-    return filledTemplate;
+    return channel === "email"
+      ? `${filledTemplate}\n${paymentSummaryText}`.trim()
+      : `${filledTemplate}${paymentSummaryText}`.trim();
   }
 
-  return channel === "email"
-    ? `${filledTemplate}\n\n${appendedCashDiscountMessage}`.trim()
-    : `${filledTemplate} ${appendedCashDiscountMessage}`.trim();
+  return filledTemplate;
+}
+
+function buildBasicEmailHtml(content: string) {
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+        <div style="max-width:680px;margin:0 auto;padding:28px 18px;">
+          <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;padding:24px;">
+            ${content
+              .split(/\n{2,}/)
+              .map((paragraph) => `<p style="margin:0 0 14px;line-height:1.55;">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+              .join("")}
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function buildReminderEmailHtml(log: ReminderLog, due: DueRecord, allDuesForDealer: DueRecord[]) {
+  const paymentSummary = buildPaymentSummary(due, allDuesForDealer);
+  const currency = due.currency || "INR";
+  const previousRows = paymentSummary.previousDues.map((entry) => `
+    <tr>
+      <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;font-weight:700;color:#111827;">${escapeHtml(entry.invoiceNumber || entry.reference || "N/A")}</td>
+      <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#374151;">${escapeHtml(entry.billDate ? formatDate(entry.billDate) : "Not available")}</td>
+      <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:700;color:#111827;">${escapeHtml(formatCurrency(entry.amount, entry.currency || currency))}</td>
+    </tr>
+  `);
+  const bodyHtml = log.content
+    .split(/\n{2,}/)
+    .filter((paragraph) => !/^Payment Summary:/i.test(paragraph.trim()))
+    .map((paragraph) => `<p style="margin:0 0 14px;line-height:1.55;color:#374151;">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+        <div style="max-width:720px;margin:0 auto;padding:28px 18px;">
+          <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+            <div style="padding:24px 26px;background:#0f766e;color:#ffffff;">
+              <div style="font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#ccfbf1;font-weight:700;">Payment Reminder</div>
+              <h1 style="margin:8px 0 0;font-size:22px;line-height:1.25;color:#ffffff;">Invoice ${escapeHtml(log.invoiceNumber || due.invoiceNumber || due.reference || "N/A")}</h1>
+              <div style="margin-top:6px;font-size:14px;color:#d1fae5;">${escapeHtml(due.companyName || due.dealerCode || "Customer")}</div>
+            </div>
+            <div style="padding:22px 26px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:0 -8px 18px;">
+                <tr>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
+                      <div style="font-size:12px;color:#6b7280;font-weight:800;text-transform:uppercase;">Current Invoice Due</div>
+                      <div style="font-size:22px;font-weight:800;margin-top:6px;color:#111827;">${escapeHtml(formatCurrency(paymentSummary.currentInvoiceDue, currency))}</div>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
+                      <div style="font-size:12px;color:#6b7280;font-weight:800;text-transform:uppercase;">Previous Due</div>
+                      <div style="font-size:22px;font-weight:800;margin-top:6px;color:#b45309;">${escapeHtml(formatCurrency(paymentSummary.previousDue, currency))}</div>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
+                      <div style="font-size:12px;color:#6b7280;font-weight:800;text-transform:uppercase;">Total Due</div>
+                      <div style="font-size:22px;font-weight:800;margin-top:6px;color:#0f766e;">${escapeHtml(formatCurrency(paymentSummary.totalDue, currency))}</div>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-bottom:20px;">
+                ${bodyHtml}
+              </div>
+
+              <h2 style="font-size:18px;line-height:1.3;margin:24px 0 10px;color:#111827;font-weight:800;">Invoice Details</h2>
+              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <tbody>
+                  <tr>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:700;">Invoice Number</td>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:700;">${escapeHtml(due.invoiceNumber || due.reference || "N/A")}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:700;">Dealer Code</td>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#111827;">${escapeHtml(due.dealerCode || due.customerCode || "N/A")}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:700;">Bill Date</td>
+                    <td style="padding:11px 13px;border-bottom:1px solid #e5e7eb;color:#111827;">${escapeHtml(due.billDate ? formatDate(due.billDate) : "Not available")}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:11px 13px;color:#6b7280;font-weight:700;">Due Date</td>
+                    <td style="padding:11px 13px;color:#111827;">${escapeHtml(due.dueDate ? formatDate(due.dueDate) : "Not available")}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h2 style="font-size:18px;line-height:1.3;margin:24px 0 10px;color:#111827;font-weight:800;">Previous Due Breakdown</h2>
+              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <thead>
+                  <tr style="background:#f9fafb;">
+                    <th align="left" style="padding:12px 13px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;font-weight:800;">Invoice</th>
+                    <th align="left" style="padding:12px 13px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;font-weight:800;">Bill Date</th>
+                    <th align="right" style="padding:12px 13px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;font-weight:800;">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${previousRows.join("") || `<tr><td colspan="3" style="padding:14px;color:#6b7280;">No previous dues found for this dealer code.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }
 
 function evaluateCashDiscountEligibility(
@@ -315,20 +527,38 @@ export async function getDashboardStats(ownerId: string): Promise<DashboardStats
       masterCount: 0,
       dueCount: 0,
       pendingReminders: 0,
-      sentReminders: 0
+      sentReminders: 0,
+      totalCompanies: 0,
+      totalOutstandingAmount: 0,
+      todayRemindersSent: 0,
+      successRate: 0,
+      failedDeliveries: 0
     };
   }
 
   const workspace = getCompanyWorkspaceContext(database, user.companyName);
   const reminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds);
+  const dues = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds);
+  const delivered = reminderLogs.filter(
+    (entry) => entry.status === "sent" || entry.status === "simulated"
+  ).length;
+  const failed = reminderLogs.filter((entry) => entry.status === "failed").length;
+  const today = new Date().toISOString().slice(0, 10);
 
   return {
     masterCount: filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds).length,
-    dueCount: filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).length,
+    dueCount: dues.length,
     pendingReminders: reminderLogs.filter((entry) => entry.status === "pending").length,
-    sentReminders: reminderLogs.filter(
-      (entry) => entry.status === "sent" || entry.status === "simulated"
-    ).length
+    sentReminders: delivered,
+    totalCompanies: new Set(dues.map((entry) => entry.companyName).filter(Boolean)).size,
+    totalOutstandingAmount: dues.reduce((sum, entry) => sum + entry.amount, 0),
+    todayRemindersSent: reminderLogs.filter(
+      (entry) =>
+        (entry.status === "sent" || entry.status === "simulated") &&
+        (entry.sentAt || entry.createdAt).slice(0, 10) === today
+    ).length,
+    successRate: delivered + failed === 0 ? 0 : Math.round((delivered / (delivered + failed)) * 100),
+    failedDeliveries: failed
   };
 }
 
@@ -368,11 +598,13 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
         continue;
       }
 
+      const allDuesForDealer = dues.filter(
+        (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
+      );
+      const paymentSummary = buildPaymentSummary(due, allDuesForDealer);
       const cdEvaluation = evaluateCashDiscountEligibility(
         due,
-        dues.filter(
-          (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
-        ),
+        allDuesForDealer,
         policies,
         today
       );
@@ -388,7 +620,7 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
         }
 
         const replacements = buildReplacements(
-          { due, contact, rule, template, cdEvaluation, billAgeDays },
+          { due, contact, rule, template, cdEvaluation, billAgeDays, paymentSummary },
           user?.companyName || "Your Company"
         );
         const channelEntries = buildChannelEntries(rule, template, contact, due);
@@ -428,7 +660,14 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
               channel === "email"
                 ? fillTemplate(template.emailSubject, replacements)
                 : `${rule.name} reminder`,
-            content: composeReminderContent(channel, body, replacements, cdEvaluation),
+            content: composeReminderContent(
+              channel,
+              body,
+              replacements,
+              cdEvaluation,
+              paymentSummary,
+              due.currency
+            ),
             failureReason: "",
             sentAt: "",
             createdAt: new Date().toISOString()
@@ -456,14 +695,31 @@ export async function generateRemindersForUser(ownerId: string, requestedDate?: 
 
       for (const log of autoSendLogs) {
         try {
-          const status = await deliverReminder(log, resolvedSettings);
+          const due = database.dueRecords.find((entry) => entry.id === log.dueId);
+          const allDuesForDealer = due
+            ? filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).filter(
+                (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
+              )
+            : [];
+          const status = await deliverReminder(log, resolvedSettings, due, allDuesForDealer);
           log.status = status;
           log.sentAt = new Date().toISOString();
           log.failureReason = "";
+          if (due) {
+            due.lastReminderDate = log.sentAt;
+            due.reminderCount = (due.reminderCount || 0) + 1;
+            due.lastDispatchStatus = status;
+            due.updatedBy = user.id;
+          }
         } catch (error) {
           log.status = "failed";
           log.failureReason =
             error instanceof Error ? error.message : "Unknown sending error occurred.";
+          const due = database.dueRecords.find((entry) => entry.id === log.dueId);
+          if (due) {
+            due.lastDispatchStatus = "failed";
+            due.updatedBy = user.id;
+          }
         }
       }
     }
@@ -522,17 +778,19 @@ export async function createManualRemindersForDue(
     const policies = database.cashDiscountPolicies.filter(
       (entry) => entry.ownerId === workspace.configOwnerId
     );
+    const allDuesForDealer = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).filter(
+      (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
+    );
+    const paymentSummary = buildPaymentSummary(due, allDuesForDealer);
     const cdEvaluation = evaluateCashDiscountEligibility(
       due,
-      filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).filter(
-        (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
-      ),
+      allDuesForDealer,
       policies,
       new Date()
     );
     const scheduledFor = new Date().toISOString();
     const replacements = buildReplacements(
-      { due, contact, rule, template, cdEvaluation, billAgeDays },
+      { due, contact, rule, template, cdEvaluation, billAgeDays, paymentSummary },
       user?.companyName || "Your Company"
     );
     const created: ReminderLog[] = [];
@@ -567,7 +825,14 @@ export async function createManualRemindersForDue(
           channel === "email"
             ? fillTemplate(template.emailSubject, replacements)
             : `${rule.name} reminder`,
-        content: composeReminderContent(channel, body, replacements, cdEvaluation),
+        content: composeReminderContent(
+          channel,
+          body,
+          replacements,
+          cdEvaluation,
+          paymentSummary,
+          due.currency
+        ),
         failureReason: "",
         sentAt: "",
         createdAt: scheduledFor
@@ -585,7 +850,29 @@ export async function createManualRemindersForDue(
   });
 }
 
-async function sendEmail(log: ReminderLog, settings: DispatchSettings) {
+export async function createManualRemindersForDues(
+  ownerId: string,
+  dueIds: string[],
+  ruleId: string,
+  channelSelection?: ReminderChannelSelection
+) {
+  const uniqueDueIds = Array.from(new Set(dueIds.filter(Boolean)));
+  const created: ReminderLog[] = [];
+
+  for (const dueId of uniqueDueIds) {
+    const entries = await createManualRemindersForDue(ownerId, dueId, ruleId, channelSelection);
+    created.push(...entries);
+  }
+
+  return created;
+}
+
+async function sendEmail(
+  log: ReminderLog,
+  settings: DispatchSettings,
+  due?: DueRecord,
+  allDuesForDealer: DueRecord[] = []
+) {
   const transporter = nodemailer.createTransport({
     host: settings.smtpHost,
     port: settings.smtpPort,
@@ -602,7 +889,8 @@ async function sendEmail(log: ReminderLog, settings: DispatchSettings) {
     from: settings.senderEmail || settings.smtpFrom,
     to: log.recipient,
     subject: log.subject,
-    text: log.content
+    text: log.content,
+    html: due ? buildReminderEmailHtml(log, due, allDuesForDealer) : buildBasicEmailHtml(log.content)
   });
 }
 
@@ -754,7 +1042,12 @@ async function sendTwilioWhatsapp(log: ReminderLog, settings: DispatchSettings) 
   );
 }
 
-async function deliverReminder(log: ReminderLog, settings: DispatchSettings) {
+async function deliverReminder(
+  log: ReminderLog,
+  settings: DispatchSettings,
+  due?: DueRecord,
+  allDuesForDealer: DueRecord[] = []
+) {
   if (settings.simulateMode) {
     return "simulated" as const;
   }
@@ -764,7 +1057,7 @@ async function deliverReminder(log: ReminderLog, settings: DispatchSettings) {
       throw new Error("SMTP settings are incomplete.");
     }
 
-    await sendEmail(log, settings);
+    await sendEmail(log, settings, due, allDuesForDealer);
     return "sent" as const;
   }
 
@@ -812,14 +1105,31 @@ export async function sendPendingReminders(ownerId: string, ruleIds?: string[], 
 
     for (const log of logs) {
       try {
-        const status = await deliverReminder(log, resolvedSettings);
+        const due = database.dueRecords.find((entry) => entry.id === log.dueId);
+        const allDuesForDealer = due
+          ? filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds).filter(
+              (entry) => getDuePartyKey(entry) === getDuePartyKey(due)
+            )
+          : [];
+        const status = await deliverReminder(log, resolvedSettings, due, allDuesForDealer);
         log.status = status;
         log.sentAt = new Date().toISOString();
         log.failureReason = "";
+        if (due) {
+          due.lastReminderDate = log.sentAt;
+          due.reminderCount = (due.reminderCount || 0) + 1;
+          due.lastDispatchStatus = status;
+          due.updatedBy = user.id;
+        }
       } catch (error) {
         log.status = "failed";
         log.failureReason =
           error instanceof Error ? error.message : "Unknown sending error occurred.";
+        const due = database.dueRecords.find((entry) => entry.id === log.dueId);
+        if (due) {
+          due.lastDispatchStatus = "failed";
+          due.updatedBy = user.id;
+        }
       }
     }
 

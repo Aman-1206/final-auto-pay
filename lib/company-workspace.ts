@@ -17,6 +17,7 @@ export function getCompanyWorkspaceContext(database: AppDatabase, companyName: s
     left.createdAt.localeCompare(right.createdAt)
   );
   const adminUser =
+    companyUsers.find((entry) => entry.role === "super_admin") ||
     companyUsers.find((entry) => entry.role === "admin") ||
     companyUsers[0] ||
     null;

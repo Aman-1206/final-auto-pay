@@ -7,7 +7,9 @@ export function DashboardShell({
   description,
   companyName,
   userName,
-  isAdmin
+  isAdmin,
+  userRole = "user",
+  canSendManualReminders = false
 }: {
   children: ReactNode;
   title: string;
@@ -15,6 +17,8 @@ export function DashboardShell({
   companyName: string;
   userName: string;
   isAdmin: boolean;
+  userRole?: "super_admin" | "admin" | "user";
+  canSendManualReminders?: boolean;
 }) {
   return (
     <DashboardClientShell
@@ -23,6 +27,8 @@ export function DashboardShell({
       companyName={companyName}
       userName={userName}
       isAdmin={isAdmin}
+      userRole={userRole}
+      canSendManualReminders={canSendManualReminders}
     >
       {children}
     </DashboardClientShell>

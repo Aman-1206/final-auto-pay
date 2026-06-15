@@ -75,6 +75,9 @@ export function resolveDispatchSettings(
       settings?.whatsappFromNumber || process.env.TWILIO_WHATSAPP_FROM_NUMBER || "",
     whatsappWebhookUrl: settings?.whatsappWebhookUrl || process.env.WHATSAPP_WEBHOOK_URL || "",
     futureIntegrationNotes: settings?.futureIntegrationNotes || "",
+    reportRecipients: settings?.reportRecipients || [],
+    reportFrequency: settings?.reportFrequency || "daily",
+    reportTime: settings?.reportTime || "18:00",
     updatedAt: settings?.updatedAt || new Date().toISOString()
   };
 }

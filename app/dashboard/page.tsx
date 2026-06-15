@@ -32,6 +32,8 @@ export default async function DashboardOverview({
       companyName={user.companyName}
       userName={user.name}
       isAdmin={isAdminUser(user)}
+      userRole={user.role}
+      canSendManualReminders={user.canSendManualReminders}
     >
       <StatusBar params={params} />
 
@@ -51,6 +53,22 @@ export default async function DashboardOverview({
         <article className="stat-card glass-panel">
           <span className="stat-label">Sent or Simulated</span>
           <strong>{stats.sentReminders}</strong>
+        </article>
+        <article className="stat-card glass-panel">
+          <span className="stat-label">Total Outstanding</span>
+          <strong>{formatCurrency(stats.totalOutstandingAmount)}</strong>
+        </article>
+        <article className="stat-card glass-panel">
+          <span className="stat-label">Today&apos;s Reminders</span>
+          <strong>{stats.todayRemindersSent}</strong>
+        </article>
+        <article className="stat-card glass-panel">
+          <span className="stat-label">Success Rate</span>
+          <strong>{stats.successRate}%</strong>
+        </article>
+        <article className="stat-card glass-panel">
+          <span className="stat-label">Failed Deliveries</span>
+          <strong>{stats.failedDeliveries}</strong>
         </article>
       </section>
 

@@ -26,6 +26,10 @@ function buildBody(triggerDay: number) {
 This is a reminder for invoice {{invoiceNumber}} dated {{billDate}} for {{companyName}} with pending amount {{pendingAmount}}.
 Reference number: {{reference}}.
 
+Current invoice due: {{currentInvoiceDueAmount}}.
+Previous due: {{previousDueAmount}}.
+Total due: {{totalDueAmount}}.
+
 The bill has now aged {{billAgeDays}} days, and this reminder was triggered by your day {{reminderDay}} rule.
 
 {{cdMessage}}
@@ -48,8 +52,8 @@ export function createDefaultRuleSet(ownerId: string) {
       name: rule.name,
       emailSubject: `Payment reminder: invoice {{invoiceNumber}} now at {{billAgeDays}} days`,
       emailBody: buildBody(rule.triggerDay),
-      whatsappBody: `Hello {{contactName}}, invoice {{invoiceNumber}} for {{companyName}} has pending amount {{pendingAmount}}. Ref: {{reference}}. The bill is now {{billAgeDays}} days old. {{cdShortMessage}}`,
-      smsBody: `Reminder: invoice {{invoiceNumber}} for {{companyName}} has pending amount {{pendingAmount}}. Ref: {{reference}}. The bill is now {{billAgeDays}} days old. {{cdShortMessage}}`,
+      whatsappBody: `Hello {{contactName}}, invoice {{invoiceNumber}} for {{companyName}} has pending amount {{pendingAmount}}. Previous due: {{previousDueAmount}}. Total due: {{totalDueAmount}}. Ref: {{reference}}. The bill is now {{billAgeDays}} days old. {{cdShortMessage}}`,
+      smsBody: `Reminder: invoice {{invoiceNumber}} for {{companyName}} has pending amount {{pendingAmount}}. Previous due: {{previousDueAmount}}. Total due: {{totalDueAmount}}. Ref: {{reference}}. {{cdShortMessage}}`,
       updatedAt: generatedAt
     };
   });
@@ -95,6 +99,9 @@ export function createDefaultRuleSet(ownerId: string) {
     smsSenderId: "",
     whatsappProviderName: "Twilio",
     futureIntegrationNotes: "",
+    reportRecipients: [],
+    reportFrequency: "daily",
+    reportTime: "18:00",
     updatedAt: generatedAt
   });
 

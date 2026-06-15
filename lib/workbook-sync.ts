@@ -6,6 +6,7 @@ import {
 } from "@/lib/excel";
 import { filterSharedCompanyRecords, getCompanyWorkspaceContext } from "@/lib/company-workspace";
 import { buildDueContactMatch } from "@/lib/contact-matching";
+import { applySalespersonMappings } from "@/lib/salesperson-mapping";
 import { readDatabase, updateDatabase } from "@/lib/storage";
 import type { DueRecord, MasterContact } from "@/lib/types";
 
@@ -168,7 +169,7 @@ export async function syncStoredMasterWorkbook(workspaceId: string, companyName:
   }
 
   await updateDatabase((database) => {
-    const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+    const { configOwnerId, sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
     database.masterContacts = database.masterContacts.filter(
       (entry) => !sharedOwnerIds.has(entry.ownerId)
     );
@@ -197,6 +198,12 @@ export async function syncStoredMasterWorkbook(workspaceId: string, companyName:
           (entry.status === "pending" || entry.status === "failed")
         )
     );
+    applySalespersonMappings(
+      database,
+      database.salespersons.filter((entry) => entry.ownerId === configOwnerId),
+      sharedOwnerIds,
+      { id: workspaceId }
+    );
   });
 
   return {
@@ -218,7 +225,7 @@ export async function syncStoredDueWorkbook(workspaceId: string, companyName: st
   }
 
   await updateDatabase((database) => {
-    const { sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
+    const { configOwnerId, sharedOwnerIds } = getCompanyWorkspaceContext(database, companyName);
     database.dueRecords = database.dueRecords.filter(
       (entry) => !sharedOwnerIds.has(entry.ownerId)
     );
@@ -229,6 +236,12 @@ export async function syncStoredDueWorkbook(workspaceId: string, companyName: st
           sharedOwnerIds.has(entry.ownerId) &&
           (entry.status === "pending" || entry.status === "failed")
         )
+    );
+    applySalespersonMappings(
+      database,
+      database.salespersons.filter((entry) => entry.ownerId === configOwnerId),
+      sharedOwnerIds,
+      { id: workspaceId }
     );
   });
 

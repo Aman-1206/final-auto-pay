@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { requireOperationPassword } from "@/lib/access-control";
+import { recordAuditLog } from "@/lib/audit";
 import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
 
@@ -34,7 +36,9 @@ export async function POST(request: Request) {
     );
   }
 
-  await updateDatabase((database) => {
+  try {
+    await requireOperationPassword(user, "admin_settings", String(formData.get("operationPassword") || ""));
+    await updateDatabase((database) => {
     const workspace = getCompanyWorkspaceContextForUser(database, user);
     const finalRuleId = ruleId || randomUUID();
     const finalTemplateId = templateId || randomUUID();
@@ -89,10 +93,19 @@ export async function POST(request: Request) {
         updatedAt: now
       });
     }
-  });
+    });
+    await recordAuditLog(user, "Template Changes", "success", `Saved reminder rule ${payload.name}.`);
 
-  return NextResponse.redirect(
-    new URL("/dashboard/settings?message=Reminder%20rule%20saved%20successfully.", request.url),
-    { status: 303 }
-  );
+    return NextResponse.redirect(
+      new URL("/dashboard/settings/templates?message=Reminder%20rule%20saved%20successfully.", request.url),
+      { status: 303 }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Reminder rule save failed.";
+    await recordAuditLog(user, "Template Changes", "failed", message);
+    return NextResponse.redirect(
+      new URL(`/dashboard/settings/templates?error=${encodeURIComponent(message)}`, request.url),
+      { status: 303 }
+    );
+  }
 }

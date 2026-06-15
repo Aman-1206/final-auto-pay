@@ -8,6 +8,7 @@ import type { AuthEvent, User, UserRole } from "@/lib/types";
 
 const sessionCookieName = "apr_session";
 const sessionDurationMs = 1000 * 60 * 60 * 24 * 14;
+const superAdminAccessEmail = "superadmin@example.com";
 
 type SessionMetadata = {
   ipAddress?: string;
@@ -22,9 +23,19 @@ export function hashPassword(password: string) {
 
 export function verifyPassword(password: string, storedHash: string) {
   const [salt, originalHash] = storedHash.split(":");
+  if (!salt || !originalHash) {
+    return false;
+  }
   const derived = scryptSync(password, salt, 64);
   const original = Buffer.from(originalHash, "hex");
+  if (derived.length !== original.length) {
+    return false;
+  }
   return timingSafeEqual(derived, original);
+}
+
+export function isSuperAdminAccessEmail(email: string) {
+  return email.trim().toLowerCase() === superAdminAccessEmail;
 }
 
 function getSessionTokenSuffix(token: string) {
@@ -76,7 +87,8 @@ export async function registerUser(input: {
       throw new Error("An account with this email already exists.");
     }
 
-    const role: UserRole = database.users.length === 0 ? "admin" : "user";
+    const role: UserRole =
+      database.users.length === 0 || isSuperAdminAccessEmail(input.email) ? "super_admin" : "user";
 
     const user: User = {
       id: randomUUID(),
@@ -85,12 +97,14 @@ export async function registerUser(input: {
       companyName: input.companyName.trim(),
       passwordHash: hashPassword(input.password),
       role,
-      createdAt: new Date().toISOString()
+      canSendManualReminders: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     database.users.push(user);
 
-    if (role === "admin") {
+    if (role === "super_admin") {
       const defaults = createDefaultRuleSet(user.id);
       database.reminderRules.push(...defaults.rules);
       database.templates.push(...defaults.templates);
@@ -120,6 +134,18 @@ export async function createSession(userId: string, metadata?: SessionMetadata) 
 
     if (user) {
       database.authEvents.push(buildAuthEvent(user, token, "login", metadata));
+      database.auditLogs.push({
+        id: randomUUID(),
+        ownerId: user.id,
+        timestamp: createdAt,
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        role: user.role,
+        action: "Login",
+        status: "success",
+        details: metadata?.ipAddress?.trim() || "Unknown"
+      });
     }
   });
   return token;
@@ -134,6 +160,18 @@ export async function destroySession(token: string, metadata?: SessionMetadata) 
 
     if (user) {
       database.authEvents.push(buildAuthEvent(user, token, "logout", metadata));
+      database.auditLogs.push({
+        id: randomUUID(),
+        ownerId: user.id,
+        timestamp: new Date().toISOString(),
+        userId: user.id,
+        userName: user.name,
+        userEmail: user.email,
+        role: user.role,
+        action: "Logout",
+        status: "success",
+        details: metadata?.ipAddress?.trim() || "Unknown"
+      });
     }
 
     database.sessions = database.sessions.filter((session) => session.token !== token);
@@ -146,6 +184,27 @@ export async function authenticateUser(email: string, password: string) {
 
   if (!user || !verifyPassword(password, user.passwordHash)) {
     throw new Error("Email or password is incorrect.");
+  }
+
+  if (isSuperAdminAccessEmail(user.email) && user.role !== "super_admin") {
+    const updatedAt = new Date().toISOString();
+
+    await updateDatabase((currentDatabase) => {
+      const currentUser = currentDatabase.users.find((entry) => entry.id === user.id);
+
+      if (currentUser) {
+        currentUser.role = "super_admin";
+        currentUser.canSendManualReminders = true;
+        currentUser.updatedAt = updatedAt;
+      }
+    });
+
+    return {
+      ...user,
+      role: "super_admin" as const,
+      canSendManualReminders: true,
+      updatedAt
+    };
   }
 
   return user;
@@ -182,7 +241,7 @@ export async function requireUser() {
 }
 
 export function isAdminUser(user: Pick<User, "role"> | null | undefined) {
-  return user?.role === "admin";
+  return user?.role === "admin" || user?.role === "super_admin";
 }
 
 export async function requireAdminUser() {

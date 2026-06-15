@@ -1,19 +1,32 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { canDispatchReminders, requireOperationPassword } from "@/lib/access-control";
+import { recordAuditLog } from "@/lib/audit";
 import { generateRemindersForUser } from "@/lib/reminder-engine";
 
 export async function POST(request: Request) {
   const user = await requireUser();
   const formData = await request.formData();
   const generationDate = String(formData.get("generationDate") || "").trim();
+  const operationPassword = String(formData.get("operationPassword") || "");
 
   try {
+    if (!canDispatchReminders(user)) {
+      throw new Error("Reminder generation access denied.");
+    }
+    await requireOperationPassword(user, "dispatch", operationPassword);
     const generated = await generateRemindersForUser(user.id, generationDate || undefined);
+    await recordAuditLog(
+      user,
+      "Reminder Dispatch",
+      "success",
+      `Generated ${generated.length} reminders.`
+    );
 
     return NextResponse.redirect(
       new URL(
-        `/dashboard/dispatch?message=${encodeURIComponent(
-          `Generated ${generated.length} eligible reminders based on the selected date. Review the queue, then send when ready.`
+        `/dashboard/dues?message=${encodeURIComponent(
+          `Generated ${generated.length} eligible reminders. Review the queue, then send reminders when ready. Reports will be sent after reminders are sent.`
         )}`,
         request.url
       ),
@@ -21,8 +34,9 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Reminder generation failed.";
+    await recordAuditLog(user, "Reminder Dispatch", "failed", message);
     return NextResponse.redirect(
-      new URL(`/dashboard/dispatch?error=${encodeURIComponent(message)}`, request.url),
+      new URL(`/dashboard/dues?error=${encodeURIComponent(message)}`, request.url),
       { status: 303 }
     );
   }

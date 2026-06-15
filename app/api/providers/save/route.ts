@@ -1,18 +1,29 @@
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { requireOperationPassword } from "@/lib/access-control";
+import { recordAuditLog } from "@/lib/audit";
 import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
+import type { DispatchSettings } from "@/lib/types";
 
 export async function POST(request: Request) {
   const user = await requireAdminUser();
   const formData = await request.formData();
 
-  await updateDatabase((database) => {
+  try {
+    await requireOperationPassword(user, "admin_settings", String(formData.get("operationPassword") || ""));
+    await updateDatabase((database) => {
     const workspace = getCompanyWorkspaceContextForUser(database, user);
     const existing = database.dispatchSettings.find(
       (entry) => entry.ownerId === workspace.configOwnerId
     );
-    const nextValues = {
+    const reportFrequency: DispatchSettings["reportFrequency"] =
+      formData.get("reportFrequency") === "weekly" ||
+      formData.get("reportFrequency") === "monthly" ||
+      formData.get("reportFrequency") === "manual"
+        ? (formData.get("reportFrequency") as DispatchSettings["reportFrequency"])
+        : "daily";
+    const nextValues: DispatchSettings = {
       ownerId: workspace.configOwnerId,
       simulateMode: formData.get("simulateMode") === "on",
       smtpHost: String(formData.get("smtpHost") || "").trim(),
@@ -38,6 +49,12 @@ export async function POST(request: Request) {
       whatsappFromNumber: String(formData.get("whatsappFromNumber") || "").trim(),
       whatsappWebhookUrl: String(formData.get("whatsappWebhookUrl") || "").trim(),
       futureIntegrationNotes: String(formData.get("futureIntegrationNotes") || "").trim(),
+      reportRecipients: String(formData.get("reportRecipients") || "")
+        .split(/[,\n]/)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+      reportFrequency,
+      reportTime: String(formData.get("reportTime") || "18:00").trim(),
       updatedAt: new Date().toISOString()
     };
 
@@ -46,10 +63,19 @@ export async function POST(request: Request) {
     } else {
       database.dispatchSettings.push(nextValues);
     }
-  });
+    });
+    await recordAuditLog(user, "Admin Settings", "success", "Communication/report settings saved.");
 
-  return NextResponse.redirect(
-    new URL("/dashboard/settings?message=Communication%20settings%20saved.", request.url),
-    { status: 303 }
-  );
+    return NextResponse.redirect(
+      new URL("/dashboard/settings/email?message=Communication%20settings%20saved.", request.url),
+      { status: 303 }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Communication settings save failed.";
+    await recordAuditLog(user, "Admin Settings", "failed", message);
+    return NextResponse.redirect(
+      new URL(`/dashboard/settings/email?error=${encodeURIComponent(message)}`, request.url),
+      { status: 303 }
+    );
+  }
 }

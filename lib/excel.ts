@@ -3,10 +3,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
 import { buildDueContactMatch } from "@/lib/contact-matching";
-import type { DueRecord, MasterContact } from "@/lib/types";
+import type { DueRecord, MasterContact, Salesperson } from "@/lib/types";
 
 type RawRow = Record<string, string | number | boolean | Date | undefined>;
-type ImportKind = "master" | "due";
+type ImportKind = "master" | "due" | "salesperson";
 type WorkbookUpdateHandler = (rows: RawRow[]) => RawRow[] | Promise<RawRow[]>;
 
 type MasterRowLookup = {
@@ -49,7 +49,8 @@ type DueRowChanges = {
 
 const storedWorkbookFileNames: Record<ImportKind, string> = {
   master: "master-database.xlsx",
-  due: "due-database.xlsx"
+  due: "due-database.xlsx",
+  salesperson: "salesperson-database.xlsx"
 };
 
 const masterFieldCandidates = {
@@ -107,7 +108,10 @@ const masterFieldCandidates = {
     "contact no"
   ],
   alternateContact: ["alternate contact", "secondary contact", "alt contact", "alternate number"],
-  notes: ["notes", "remarks", "comment"]
+  notes: ["notes", "remarks", "comment"],
+  salespersonId: ["salesperson id", "sales person id", "employee id", "sales employee id"],
+  salespersonName: ["salesperson", "salesperson name", "sales person", "sales person name"],
+  salespersonEmail: ["salesperson email", "sales person email", "sales email"]
 } as const;
 
 const dueFieldCandidates = {
@@ -175,7 +179,27 @@ const dueFieldCandidates = {
   currency: ["currency"],
   overdueDays: ["overdue by days", "overdue by day", "overdue days", "ageing days"],
   reference: ["reference", "reference number", "po number", "po no"],
-  notes: ["notes", "remarks", "comment"]
+  notes: ["notes", "remarks", "comment"],
+  totalDueAmount: ["total due amount", "total outstanding amount", "total outstanding", "total_due_amount"],
+  salespersonId: ["salesperson id", "sales person id", "employee id", "sales employee id", "salesperson_id"],
+  salespersonName: ["salesperson", "salesperson name", "sales person", "sales person name", "salesperson_name"],
+  salespersonEmail: ["salesperson email", "sales person email", "sales email", "salesperson_email"]
+} as const;
+
+const salespersonFieldCandidates = {
+  name: ["salesperson name", "sales person name", "salesperson", "sales person", "name"],
+  employeeId: ["employee id", "salesperson id", "sales person id", "staff id", "id"],
+  email: ["email", "email id", "salesperson email", "sales person email", "mail"],
+  phoneNumber: ["phone", "phone number", "mobile", "mobile number", "contact number"],
+  dealerCodes: [
+    "dealers",
+    "dealer codes",
+    "dealer code",
+    "dealer ids",
+    "customer codes",
+    "customer code",
+    "assigned dealers"
+  ]
 } as const;
 
 function normalizeHeader(value: string) {
@@ -183,7 +207,12 @@ function normalizeHeader(value: string) {
 }
 
 function getCandidateHeaders(kind: ImportKind) {
-  const fieldCandidates = kind === "master" ? masterFieldCandidates : dueFieldCandidates;
+  const fieldCandidates =
+    kind === "master"
+      ? masterFieldCandidates
+      : kind === "due"
+        ? dueFieldCandidates
+        : salespersonFieldCandidates;
   return new Set(
     Object.values(fieldCandidates)
       .flat()
@@ -630,7 +659,11 @@ function buildWorkbookFromRows(rows: RawRow[], kind: ImportKind) {
   XLSX.utils.book_append_sheet(
     workbook,
     worksheet,
-    kind === "master" ? "Master Database" : "Due Database"
+    kind === "master"
+      ? "Master Database"
+      : kind === "due"
+        ? "Due Database"
+        : "Salespersons"
   );
 
   return workbook;
@@ -926,6 +959,9 @@ export function mapMasterRows(rows: RawRow[], ownerId: string) {
         sms: toText(pickValue(row, masterFieldCandidates.sms)),
         alternateContact: toText(pickValue(row, masterFieldCandidates.alternateContact)),
         notes: toText(pickValue(row, masterFieldCandidates.notes)),
+        salespersonId: toText(pickValue(row, masterFieldCandidates.salespersonId)),
+        salespersonName: toText(pickValue(row, masterFieldCandidates.salespersonName)),
+        salespersonEmail: toText(pickValue(row, masterFieldCandidates.salespersonEmail)),
         importedAt,
         raw: Object.fromEntries(
           Object.entries(row).map(([key, value]) => [key, toText(value)])
@@ -938,7 +974,7 @@ export function mapDueRows(rows: RawRow[], ownerId: string, contacts: MasterCont
   const importedAt = new Date().toISOString();
   const expandedRows = expandGroupedDueRows(rows);
 
-  return expandedRows
+  const mappedRows = expandedRows
     .map(normalizeRow)
     .filter(
       (row) =>
@@ -953,6 +989,7 @@ export function mapDueRows(rows: RawRow[], ownerId: string, contacts: MasterCont
       const companyName = toText(pickValue(row, dueFieldCandidates.companyName));
       const billDate = toDateValue(pickValue(row, dueFieldCandidates.billDate));
       const pendingAmount = toAmount(pickValue(row, dueFieldCandidates.amount));
+      const contactByDealer = matchMasterContactByDealerCode(dealerCode, contacts);
       const match = buildDueContactMatch(
         {
           dealerCode,
@@ -990,10 +1027,77 @@ export function mapDueRows(rows: RawRow[], ownerId: string, contacts: MasterCont
         matchedWhatsapp: match.matchedWhatsapp,
         matchedSms: match.matchedSms,
         contactMatchStatus: match.contactMatchStatus,
+        totalDueAmount: toAmount(pickValue(row, dueFieldCandidates.totalDueAmount)) || pendingAmount,
+        salespersonId:
+          toText(pickValue(row, dueFieldCandidates.salespersonId)) ||
+          contactByDealer?.salespersonId ||
+          "",
+        salespersonName:
+          toText(pickValue(row, dueFieldCandidates.salespersonName)) ||
+          contactByDealer?.salespersonName ||
+          "",
+        salespersonEmail:
+          toText(pickValue(row, dueFieldCandidates.salespersonEmail)) ||
+          contactByDealer?.salespersonEmail ||
+          "",
+        lastReminderDate: "",
+        reminderCount: 0,
+        lastDispatchStatus: "",
+        createdBy: ownerId,
+        updatedBy: ownerId,
         importedAt,
         raw: Object.fromEntries(
           Object.entries(row).map(([key, value]) => [key, toText(value)])
         )
       };
     });
+
+  const totalByDealer = mappedRows.reduce((summary, record) => {
+    const key = (record.dealerCode || record.customerCode || record.companyName).toLowerCase().trim();
+    summary.set(key, (summary.get(key) || 0) + record.amount);
+    return summary;
+  }, new Map<string, number>());
+
+  return mappedRows.map((record) => {
+    const key = (record.dealerCode || record.customerCode || record.companyName).toLowerCase().trim();
+    return {
+      ...record,
+      totalDueAmount: record.totalDueAmount || totalByDealer.get(key) || record.amount
+    };
+  });
+}
+
+export function parseDealerCodeList(value: string) {
+  return value
+    .split(/[\n,;]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function mapSalespersonRows(rows: RawRow[], ownerId: string) {
+  const importedAt = new Date().toISOString();
+
+  return rows
+    .map(normalizeRow)
+    .map((row) => ({
+      name: toText(pickValue(row, salespersonFieldCandidates.name)),
+      employeeId: toText(pickValue(row, salespersonFieldCandidates.employeeId)),
+      email: toText(pickValue(row, salespersonFieldCandidates.email)),
+      phoneNumber: toText(pickValue(row, salespersonFieldCandidates.phoneNumber)),
+      dealerCodes: parseDealerCodeList(
+        toText(pickValue(row, salespersonFieldCandidates.dealerCodes))
+      )
+    }))
+    .filter((entry) => entry.name && entry.email && entry.dealerCodes.length > 0)
+    .map<Salesperson>((entry) => ({
+      id: randomUUID(),
+      ownerId,
+      name: entry.name,
+      employeeId: entry.employeeId || entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      email: entry.email,
+      phoneNumber: entry.phoneNumber,
+      dealerCodes: entry.dealerCodes,
+      createdAt: importedAt,
+      updatedAt: importedAt
+    }));
 }

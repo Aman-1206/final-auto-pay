@@ -5,13 +5,32 @@ import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
+const adminSections: Array<{
+  href: Route;
+  label: string;
+  superAdminOnly?: boolean;
+}> = [
+  { href: "/dashboard/settings", label: "Overview" },
+  { href: "/dashboard/settings/users", label: "Users", superAdminOnly: true },
+  { href: "/dashboard/settings/passwords", label: "Passwords", superAdminOnly: true },
+  { href: "/dashboard/settings/database", label: "Database" },
+  { href: "/dashboard/settings/reminders", label: "Reminders" },
+  { href: "/dashboard/settings/templates", label: "Templates" },
+  { href: "/dashboard/settings/salespersons", label: "Salespersons" },
+  { href: "/dashboard/settings/email", label: "Email" },
+  { href: "/dashboard/settings/reports", label: "Reports" },
+  { href: "/dashboard/settings/logs", label: "Logs" }
+];
+
 export function DashboardClientShell({
   children,
   title,
   description,
   companyName,
   userName,
-  isAdmin
+  isAdmin,
+  userRole,
+  canSendManualReminders
 }: {
   children: ReactNode;
   title: string;
@@ -19,19 +38,30 @@ export function DashboardClientShell({
   companyName: string;
   userName: string;
   isAdmin: boolean;
+  userRole: "super_admin" | "admin" | "user";
+  canSendManualReminders: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const canUseDues = isAdmin || canSendManualReminders || userRole === "user";
+  const isSettingsRoute = pathname.startsWith("/dashboard/settings");
+  const visibleAdminSections = adminSections.filter(
+    (item) => !item.superAdminOnly || userRole === "super_admin"
+  );
   const navItems: Array<{ href: Route; label: string }> = [
-    { href: "/dashboard", label: "Overview" },
+    { href: "/dashboard", label: "Dashboard" },
     { href: "/dashboard/master", label: "Master Database" },
-    { href: "/dashboard/dues", label: "Dues Upload" },
-    { href: "/dashboard/dispatch", label: "Dispatch Center" },
+    ...(canUseDues
+      ? ([{ href: "/dashboard/dues", label: "Dues & Dispatch" }] satisfies Array<{
+          href: Route;
+          label: string;
+        }>)
+      : []),
     ...(isAdmin
       ? ([
-          { href: "/dashboard/settings", label: "Admin Dashboard" }
+          { href: "/dashboard/settings", label: "Admin Panel" }
         ] satisfies Array<{ href: Route; label: string }>)
       : [])
   ];
@@ -40,7 +70,10 @@ export function DashboardClientShell({
     navItems.forEach((item) => {
       router.prefetch(item.href);
     });
-  }, [isAdmin, router]);
+    visibleAdminSections.forEach((item) => {
+      router.prefetch(item.href);
+    });
+  }, [isAdmin, router, userRole]);
 
   useEffect(() => {
     setPendingHref(null);
@@ -117,7 +150,37 @@ export function DashboardClientShell({
         </section>
 
         <div className={`dashboard-content-shell ${isPending ? "is-loading" : ""}`}>
-          {children}
+          {isSettingsRoute && isAdmin ? (
+            <div className="admin-tabs-shell">
+              <nav className="admin-tabs-nav glass-panel" aria-label="Admin settings">
+                {visibleAdminSections.map((item) => {
+                  const isActive =
+                    pathname === item.href ||
+                    (item.href !== "/dashboard/settings" && pathname.startsWith(item.href));
+                  const isTargetPending = pendingHref === item.href;
+
+                  return (
+                    <button
+                      key={item.href}
+                      type="button"
+                      className={`admin-tab-link ${isActive ? "is-active" : ""} ${
+                        isTargetPending ? "is-pending" : ""
+                      }`}
+                      onClick={() => handleNavigate(item.href)}
+                      onMouseEnter={() => router.prefetch(item.href)}
+                      aria-current={isActive ? "page" : undefined}
+                    >
+                      <span>{item.label}</span>
+                      {isTargetPending ? <span className="nav-link-pulse" aria-hidden="true" /> : null}
+                    </button>
+                  );
+                })}
+              </nav>
+              <div className="admin-tabs-content">{children}</div>
+            </div>
+          ) : (
+            children
+          )}
 
           {isPending ? (
             <div className="route-loading-overlay" aria-live="polite" aria-busy="true">

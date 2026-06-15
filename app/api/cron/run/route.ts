@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCompanyWorkspaceContext } from "@/lib/company-workspace";
 import { generateRemindersForUser, sendPendingReminders } from "@/lib/reminder-engine";
+import { sendDailyActivityReport } from "@/lib/reports";
 import { readDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
   const database = await readDatabase();
   const users = database.users;
   const processedWorkspaces = new Set<string>();
-  const summary: Array<{ email: string; generated: number; processed: number }> = [];
+  const summary: Array<{ email: string; generated: number; processed: number; report: string }> = [];
 
   for (const user of users) {
     const workspace = getCompanyWorkspaceContext(database, user.companyName);
@@ -33,11 +34,19 @@ export async function POST(request: Request) {
       .map((entry) => entry.id);
     const processed =
       autoSendRuleIds.length > 0 ? (await sendPendingReminders(user.id, autoSendRuleIds)).length : 0;
+    const settings = database.dispatchSettings.find((entry) => entry.ownerId === workspace.configOwnerId);
+    let report = "skipped";
+
+    if (settings?.reportFrequency && settings.reportFrequency !== "manual") {
+      await sendDailyActivityReport(user);
+      report = settings.reportFrequency;
+    }
 
     summary.push({
       email: user.email,
       generated: generated.length,
-      processed
+      processed,
+      report
     });
   }
 

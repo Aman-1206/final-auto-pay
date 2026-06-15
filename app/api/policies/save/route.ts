@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireAdminUser } from "@/lib/auth";
+import { requireOperationPassword } from "@/lib/access-control";
+import { recordAuditLog } from "@/lib/audit";
 import { getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { updateDatabase } from "@/lib/storage";
 
@@ -25,7 +27,9 @@ export async function POST(request: Request) {
     );
   }
 
-  await updateDatabase((database) => {
+  try {
+    await requireOperationPassword(user, "admin_settings", String(formData.get("operationPassword") || ""));
+    await updateDatabase((database) => {
     const workspace = getCompanyWorkspaceContextForUser(database, user);
     const existing = database.cashDiscountPolicies.find(
       (entry) => entry.id === policyId && entry.ownerId === workspace.configOwnerId
@@ -52,10 +56,19 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now
     });
-  });
+    });
+    await recordAuditLog(user, "Admin Settings", "success", `Saved CD policy ${payload.name}.`);
 
-  return NextResponse.redirect(
-    new URL("/dashboard/settings?message=Cash%20discount%20policy%20saved.", request.url),
-    { status: 303 }
-  );
+    return NextResponse.redirect(
+      new URL("/dashboard/settings/reminders?message=Cash%20discount%20policy%20saved.", request.url),
+      { status: 303 }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Cash discount policy save failed.";
+    await recordAuditLog(user, "Admin Settings", "failed", message);
+    return NextResponse.redirect(
+      new URL(`/dashboard/settings/reminders?error=${encodeURIComponent(message)}`, request.url),
+      { status: 303 }
+    );
+  }
 }

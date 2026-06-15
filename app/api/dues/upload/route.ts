@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { canUploadDueDatabase, requireOperationPassword } from "@/lib/access-control";
+import { recordAuditLog } from "@/lib/audit";
 import { getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { parseWorkbook, readStoredWorkbookRows, writeStoredWorkbookRows } from "@/lib/excel";
 import { syncStoredDueWorkbook } from "@/lib/workbook-sync";
@@ -10,6 +12,15 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const file = formData.get("file");
   const mode = String(formData.get("mode") || "replace");
+  const operationPassword = String(formData.get("operationPassword") || "");
+
+  if (!canUploadDueDatabase(user)) {
+    await recordAuditLog(user, "Database Upload", "failed", "Due upload denied by role.");
+    return NextResponse.redirect(
+      new URL("/dashboard/dues?error=Due%20upload%20access%20denied.", request.url),
+      { status: 303 }
+    );
+  }
 
   if (!(file instanceof File)) {
     return NextResponse.redirect(
@@ -19,6 +30,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await requireOperationPassword(user, "due_upload", operationPassword);
     const buffer = Buffer.from(await file.arrayBuffer());
     const rows = parseWorkbook(buffer, "due");
     const existingRows =
@@ -35,6 +47,7 @@ export async function POST(request: Request) {
     );
 
     const result = await syncStoredDueWorkbook(workspaceId, user.companyName);
+    await recordAuditLog(user, "Database Upload", "success", `Due upload saved ${result.recordCount} rows.`);
 
     return NextResponse.redirect(
       new URL(
@@ -47,6 +60,7 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Dues import failed.";
+    await recordAuditLog(user, "Database Upload", "failed", message);
     return NextResponse.redirect(
       new URL(`/dashboard/dues?error=${encodeURIComponent(message)}`, request.url),
       { status: 303 }

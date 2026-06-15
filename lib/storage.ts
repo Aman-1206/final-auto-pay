@@ -17,7 +17,10 @@ const defaultDatabase: AppDatabase = {
   templates: [],
   dispatchSettings: [],
   cashDiscountPolicies: [],
-  reminderLogs: []
+  reminderLogs: [],
+  operationPasswords: [],
+  salespersons: [],
+  auditLogs: []
 };
 
 type StoredDatabaseDocument = AppDatabase & {
@@ -39,6 +42,14 @@ function toBooleanValue(value: unknown, fallback = false) {
   return typeof value === "boolean" ? value : value === "true" ? true : value === "false" ? false : fallback;
 }
 
+function normalizeRole(value: unknown, index = 1) {
+  return value === "super_admin" || value === "admin" || value === "user"
+    ? value
+    : index === 0
+      ? "super_admin"
+      : "user";
+}
+
 function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppDatabase {
   const source = input || {};
 
@@ -50,8 +61,10 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
           email: toStringValue(user?.email).toLowerCase(),
           companyName: toStringValue(user?.companyName),
           passwordHash: toStringValue(user?.passwordHash),
-          role: user?.role === "user" ? "user" : user?.role === "admin" ? "admin" : index === 0 ? "admin" : "user",
-          createdAt: toStringValue(user?.createdAt)
+          role: normalizeRole(user?.role, index),
+          canSendManualReminders: toBooleanValue((user as Record<string, unknown>)?.canSendManualReminders, true),
+          createdAt: toStringValue(user?.createdAt),
+          updatedAt: toStringValue((user as Record<string, unknown>)?.updatedAt || user?.createdAt)
         }))
       : [],
     sessions: Array.isArray(source.sessions)
@@ -72,7 +85,7 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
           userEmail: toStringValue(event?.userEmail),
           userName: toStringValue(event?.userName),
           companyName: toStringValue(event?.companyName),
-          userRole: event?.userRole === "admin" ? "admin" : "user",
+          userRole: normalizeRole(event?.userRole),
           type: event?.type === "logout" ? "logout" : "login",
           sessionTokenSuffix: toStringValue(event?.sessionTokenSuffix),
           ipAddress: toStringValue(event?.ipAddress),
@@ -95,6 +108,9 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
             sms: toStringValue(contact?.sms),
             alternateContact: toStringValue(contact?.alternateContact),
             notes: toStringValue(contact?.notes),
+            salespersonId: toStringValue((contact as Record<string, unknown>)?.salespersonId),
+            salespersonName: toStringValue((contact as Record<string, unknown>)?.salespersonName),
+            salespersonEmail: toStringValue((contact as Record<string, unknown>)?.salespersonEmail),
             importedAt: toStringValue(contact?.importedAt),
             raw:
               contact?.raw && typeof contact.raw === "object"
@@ -134,6 +150,15 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
             matchedWhatsapp: toStringValue(record?.matchedWhatsapp),
             matchedSms: toStringValue(record?.matchedSms),
             contactMatchStatus: record?.contactMatchStatus === "matched" ? "matched" : "missing",
+            totalDueAmount: toNumberValue((record as Record<string, unknown>)?.totalDueAmount ?? record?.amount),
+            salespersonId: toStringValue((record as Record<string, unknown>)?.salespersonId),
+            salespersonName: toStringValue((record as Record<string, unknown>)?.salespersonName),
+            salespersonEmail: toStringValue((record as Record<string, unknown>)?.salespersonEmail),
+            lastReminderDate: toStringValue((record as Record<string, unknown>)?.lastReminderDate),
+            reminderCount: toNumberValue((record as Record<string, unknown>)?.reminderCount),
+            lastDispatchStatus: toStringValue((record as Record<string, unknown>)?.lastDispatchStatus),
+            createdBy: toStringValue((record as Record<string, unknown>)?.createdBy),
+            updatedBy: toStringValue((record as Record<string, unknown>)?.updatedBy),
             importedAt: toStringValue(record?.importedAt),
             raw:
               record?.raw && typeof record.raw === "object"
@@ -208,6 +233,16 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
           whatsappFromNumber: toStringValue(settings?.whatsappFromNumber),
           whatsappWebhookUrl: toStringValue(settings?.whatsappWebhookUrl),
           futureIntegrationNotes: toStringValue(settings?.futureIntegrationNotes),
+          reportRecipients: Array.isArray((settings as Record<string, unknown>)?.reportRecipients)
+            ? ((settings as Record<string, unknown>)?.reportRecipients as unknown[]).map(toStringValue).filter(Boolean)
+            : [],
+          reportFrequency:
+            (settings as Record<string, unknown>)?.reportFrequency === "weekly" ||
+            (settings as Record<string, unknown>)?.reportFrequency === "monthly" ||
+            (settings as Record<string, unknown>)?.reportFrequency === "manual"
+              ? ((settings as Record<string, unknown>)?.reportFrequency as "weekly" | "monthly" | "manual")
+              : "daily",
+          reportTime: toStringValue((settings as Record<string, unknown>)?.reportTime) || "18:00",
           updatedAt: toStringValue(settings?.updatedAt)
         }))
       : [],
@@ -256,6 +291,53 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
           failureReason: toStringValue(log?.failureReason),
           sentAt: toStringValue(log?.sentAt),
           createdAt: toStringValue(log?.createdAt)
+        }))
+      : []
+    ,
+    operationPasswords: Array.isArray(source.operationPasswords)
+      ? source.operationPasswords.map((entry) => ({
+          ownerId: toStringValue(entry?.ownerId),
+          key:
+            entry?.key === "master_upload" ||
+            entry?.key === "due_upload" ||
+            entry?.key === "dispatch" ||
+            entry?.key === "report_generation" ||
+            entry?.key === "admin_settings"
+              ? entry.key
+              : "admin_settings",
+          label: toStringValue(entry?.label),
+          passwordHash: toStringValue(entry?.passwordHash),
+          updatedAt: toStringValue(entry?.updatedAt),
+          updatedBy: toStringValue(entry?.updatedBy)
+        }))
+      : [],
+    salespersons: Array.isArray(source.salespersons)
+      ? source.salespersons.map((entry) => ({
+          id: toStringValue(entry?.id),
+          ownerId: toStringValue(entry?.ownerId),
+          name: toStringValue(entry?.name),
+          employeeId: toStringValue(entry?.employeeId),
+          email: toStringValue(entry?.email),
+          phoneNumber: toStringValue(entry?.phoneNumber),
+          dealerCodes: Array.isArray(entry?.dealerCodes)
+            ? entry.dealerCodes.map(toStringValue).filter(Boolean)
+            : [],
+          createdAt: toStringValue(entry?.createdAt),
+          updatedAt: toStringValue(entry?.updatedAt)
+        }))
+      : [],
+    auditLogs: Array.isArray(source.auditLogs)
+      ? source.auditLogs.map((entry) => ({
+          id: toStringValue(entry?.id),
+          ownerId: toStringValue(entry?.ownerId),
+          timestamp: toStringValue(entry?.timestamp),
+          userId: toStringValue(entry?.userId),
+          userName: toStringValue(entry?.userName),
+          userEmail: toStringValue(entry?.userEmail),
+          role: normalizeRole(entry?.role),
+          action: toStringValue(entry?.action),
+          status: entry?.status === "failed" ? "failed" : "success",
+          details: toStringValue(entry?.details)
         }))
       : []
   };

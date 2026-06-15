@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "user";
+export type UserRole = "super_admin" | "admin" | "user";
 
 export type User = {
   id: string;
@@ -7,7 +7,9 @@ export type User = {
   companyName: string;
   passwordHash: string;
   role: UserRole;
+  canSendManualReminders: boolean;
   createdAt: string;
+  updatedAt: string;
 };
 
 export type Session = {
@@ -46,6 +48,9 @@ export type MasterContact = {
   sms: string;
   alternateContact: string;
   notes: string;
+  salespersonId: string;
+  salespersonName: string;
+  salespersonEmail: string;
   importedAt: string;
   raw: Record<string, string>;
 };
@@ -72,6 +77,15 @@ export type DueRecord = {
   matchedWhatsapp: string;
   matchedSms: string;
   contactMatchStatus: "matched" | "missing";
+  totalDueAmount: number;
+  salespersonId: string;
+  salespersonName: string;
+  salespersonEmail: string;
+  lastReminderDate: string;
+  reminderCount: number;
+  lastDispatchStatus: string;
+  createdBy: string;
+  updatedBy: string;
   importedAt: string;
   raw: Record<string, string>;
 };
@@ -131,6 +145,9 @@ export type DispatchSettings = {
   whatsappFromNumber: string;
   whatsappWebhookUrl: string;
   futureIntegrationNotes: string;
+  reportRecipients: string[];
+  reportFrequency: "daily" | "weekly" | "monthly" | "manual";
+  reportTime: string;
   updatedAt: string;
 };
 
@@ -173,6 +190,47 @@ export type ReminderLog = {
   createdAt: string;
 };
 
+export type OperationPasswordKey =
+  | "master_upload"
+  | "due_upload"
+  | "dispatch"
+  | "report_generation"
+  | "admin_settings";
+
+export type OperationPassword = {
+  ownerId: string;
+  key: OperationPasswordKey;
+  label: string;
+  passwordHash: string;
+  updatedAt: string;
+  updatedBy: string;
+};
+
+export type Salesperson = {
+  id: string;
+  ownerId: string;
+  name: string;
+  employeeId: string;
+  email: string;
+  phoneNumber: string;
+  dealerCodes: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditLog = {
+  id: string;
+  ownerId: string;
+  timestamp: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  role: UserRole;
+  action: string;
+  status: "success" | "failed";
+  details: string;
+};
+
 export type AppDatabase = {
   users: User[];
   sessions: Session[];
@@ -184,6 +242,9 @@ export type AppDatabase = {
   dispatchSettings: DispatchSettings[];
   cashDiscountPolicies: CashDiscountPolicy[];
   reminderLogs: ReminderLog[];
+  operationPasswords: OperationPassword[];
+  salespersons: Salesperson[];
+  auditLogs: AuditLog[];
 };
 
 export type DashboardStats = {
@@ -191,4 +252,9 @@ export type DashboardStats = {
   dueCount: number;
   pendingReminders: number;
   sentReminders: number;
+  totalCompanies: number;
+  totalOutstandingAmount: number;
+  todayRemindersSent: number;
+  successRate: number;
+  failedDeliveries: number;
 };

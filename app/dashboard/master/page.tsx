@@ -1,5 +1,7 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { ProtectedSubmitButton } from "@/components/protected-submit-button";
+import { TableSearch } from "@/components/table-search";
 import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
@@ -28,6 +30,8 @@ export default async function MasterDatabasePage({
       companyName={user.companyName}
       userName={user.name}
       isAdmin={isAdmin}
+      userRole={user.role}
+      canSendManualReminders={user.canSendManualReminders}
     >
       <StatusBar params={params} />
 
@@ -48,10 +52,15 @@ export default async function MasterDatabasePage({
               encType="multipart/form-data"
               className="form-stack"
             >
-              <label className="field">
-                <span>Upload file</span>
-                <input name="file" type="file" accept=".xlsx,.xlxs,.xls,.csv" required />
-              </label>
+            <label className="field">
+              <span>Upload file</span>
+              <input name="file" type="file" accept=".xlsx,.xlxs,.xls,.csv" required />
+            </label>
+
+            <label className="field">
+              <span>Master database upload password</span>
+              <input name="operationPassword" type="password" minLength={8} placeholder="At least 8 characters" />
+            </label>
 
               <label className="field">
                 <span>Import mode</span>
@@ -61,9 +70,14 @@ export default async function MasterDatabasePage({
                 </select>
               </label>
 
-              <button className="button" type="submit">
-                Save master database
-              </button>
+              <div className="button-row">
+                <ProtectedSubmitButton className="button">
+                  Save master database
+                </ProtectedSubmitButton>
+                <a className="button button-secondary" href="/api/master/sample">
+                  Download sample Excel
+                </a>
+              </div>
             </form>
 
             {contacts.length > 0 ? (
@@ -95,14 +109,17 @@ export default async function MasterDatabasePage({
             <p>{contacts.length} shared records available for reminder matching.</p>
           </div>
 
+          <TableSearch />
+
           <div className="table-wrap">
-            <table>
+            <table data-searchable-table>
               <thead>
                 <tr>
                   <th>No.</th>
                   <th>Dealer code</th>
                   <th>Company</th>
                   <th>Primary contact</th>
+                  <th>Salesperson</th>
                   <th>Email</th>
                   <th>WhatsApp</th>
                   <th>Updated</th>
@@ -111,7 +128,7 @@ export default async function MasterDatabasePage({
               <tbody>
                 {contacts.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={8}>
                       {isAdmin
                         ? "Upload a master file to populate contacts."
                         : "An admin needs to upload a master file to populate shared contacts."}
@@ -124,6 +141,7 @@ export default async function MasterDatabasePage({
                       <td>{contact.dealerCode || contact.customerCode || "N/A"}</td>
                       <td>{contact.companyName}</td>
                       <td>{contact.primaryContact || "N/A"}</td>
+                      <td>{contact.salespersonName || contact.salespersonEmail || "Unassigned"}</td>
                       <td>{contact.email || "N/A"}</td>
                       <td>{contact.whatsapp || contact.sms || "N/A"}</td>
                       <td>{formatDate(contact.importedAt)}</td>
