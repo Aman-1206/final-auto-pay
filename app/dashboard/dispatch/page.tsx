@@ -1,4 +1,6 @@
 import { DashboardShell } from "@/components/dashboard-shell";
+import { ChannelLabel } from "@/components/channel-label";
+import { GenerationDateField } from "@/components/generation-date-field";
 import { findMatchingMasterContact } from "@/lib/contact-matching";
 import {
   filterSharedCompanyRecords,
@@ -40,11 +42,13 @@ export default async function DispatchPage({
   const allReminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const reminderLogs = allReminderLogs;
+  const today = new Date().toISOString().slice(0, 10);
+  const todayGeneratedLogs = allReminderLogs.filter(
+    (entry) => entry.scheduledFor.slice(0, 10) === today
+  );
   const pendingCount = allReminderLogs.filter((entry) => entry.status === "pending").length;
   const failedCount = allReminderLogs.filter((entry) => entry.status === "failed").length;
-  const deliveredCount = allReminderLogs.filter(
-    (entry) => entry.status === "sent" || entry.status === "simulated"
-  ).length;
+  const deliveredCount = allReminderLogs.filter((entry) => entry.status === "sent").length;
 
   return (
     <DashboardShell
@@ -62,8 +66,8 @@ export default async function DispatchPage({
             <span className="dispatch-kicker">Twilio dispatch</span>
             <h2>One quiet place to control email, SMS, and WhatsApp sends.</h2>
             <p>
-              Keep simulate mode on while testing templates. When you are ready, add your SMTP
-              details plus Twilio sender numbers and run live sends from the same panel.
+              Add your SMTP details plus Twilio sender numbers, generate the queue, and send live
+              reminders from the same panel.
             </p>
           </div>
 
@@ -99,9 +103,6 @@ export default async function DispatchPage({
 
             <div className="stacked-layout">
               <p className="muted-copy">
-                Current mode: <strong>{settings.simulateMode ? "Simulate" : "Live send"}</strong>
-              </p>
-              <p className="muted-copy">
                 Sender email: {settings.senderEmail || settings.smtpFrom || "Not configured"}
               </p>
               <p className="muted-copy">
@@ -134,10 +135,8 @@ export default async function DispatchPage({
 
             <div className="dispatch-action-stack">
               <form action="/api/reminders/generate" method="post" className="dispatch-form">
-                <label className="field">
-                  <span>Generation date</span>
-                  <input name="generationDate" type="date" />
-                </label>
+                <GenerationDateField />
+                <TodayGenerationNotice count={todayGeneratedLogs.length} />
                 <button className="button" type="submit">
                   Generate eligible reminders
                 </button>
@@ -290,9 +289,9 @@ export default async function DispatchPage({
                         </td>
                         <td>{rule?.name || "Unknown rule"}</td>
                         <td>
-                          <span className="dispatch-badge">{formatChannelLabel(log.channel)}</span>
+                          <ChannelLabel channel={log.channel} />
                         </td>
-                        <td>{log.recipient}</td>
+                        <td>{isAdmin ? log.recipient : "Hidden"}</td>
                         <td>
                           <span className={`dispatch-badge dispatch-status-${log.status}`}>
                             {log.status}
@@ -318,16 +317,17 @@ export default async function DispatchPage({
   );
 }
 
-function formatChannelLabel(channel: "email" | "whatsapp" | "sms") {
-  if (channel === "whatsapp") {
-    return "WhatsApp";
+function TodayGenerationNotice({ count }: { count: number }) {
+  if (count === 0) {
+    return null;
   }
 
-  if (channel === "sms") {
-    return "SMS";
-  }
-
-  return "Email";
+  return (
+    <p className="status-banner status-warning">
+      Today&apos;s reminders are already generated: {count} queue record{count === 1 ? "" : "s"}.
+      Generating again will skip duplicate invoice, rule, channel, and date combinations.
+    </p>
+  );
 }
 
 function StatusBar({ params }: { params: Record<string, string | string[] | undefined> }) {

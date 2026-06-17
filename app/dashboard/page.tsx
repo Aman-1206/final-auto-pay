@@ -1,9 +1,13 @@
 import { DashboardShell } from "@/components/dashboard-shell";
+import { ChannelLabel } from "@/components/channel-label";
 import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { getDashboardStats } from "@/lib/reminder-engine";
 import { readDatabase } from "@/lib/storage";
 import { formatCurrency, formatDate, formatElapsedDaysTag } from "@/lib/utils";
+import type { Route } from "next";
+import Link from "next/link";
+import type { ReactNode } from "react";
 
 export default async function DashboardOverview({
   searchParams
@@ -17,6 +21,7 @@ export default async function DashboardOverview({
     searchParams
   ]);
   const workspace = getCompanyWorkspaceContextForUser(database, user);
+  const isAdmin = isAdminUser(user);
 
   const dueRecords = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate))
@@ -31,45 +36,61 @@ export default async function DashboardOverview({
       description="Track your imported records, check upcoming dues, and see the latest reminder activity."
       companyName={user.companyName}
       userName={user.name}
-      isAdmin={isAdminUser(user)}
+      isAdmin={isAdmin}
       userRole={user.role}
       canSendManualReminders={user.canSendManualReminders}
     >
       <StatusBar params={params} />
 
       <section className="stats-grid">
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Master Contacts</span>
-          <strong>{stats.masterCount}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Due Records</span>
-          <strong>{stats.dueCount}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Pending Reminders</span>
-          <strong>{stats.pendingReminders}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Sent or Simulated</span>
-          <strong>{stats.sentReminders}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Total Outstanding</span>
-          <strong>{formatCurrency(stats.totalOutstandingAmount)}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Today&apos;s Reminders</span>
-          <strong>{stats.todayRemindersSent}</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Success Rate</span>
-          <strong>{stats.successRate}%</strong>
-        </article>
-        <article className="stat-card glass-panel">
-          <span className="stat-label">Failed Deliveries</span>
-          <strong>{stats.failedDeliveries}</strong>
-        </article>
+        {isAdmin ? (
+          <StatCard href="/dashboard/master" label="Master Contacts" value={stats.masterCount} />
+        ) : null}
+        <StatCard href="/dashboard/dues" label="Due Records" value={stats.dueCount} />
+        <StatCard
+          href="/dashboard/dues?status=pending#reminder-queue"
+          label="Pending Reminders"
+          value={stats.pendingReminders}
+        />
+        <StatCard
+          href="/dashboard/dues?status=sent#reminder-queue"
+          label="Sent Messages"
+          value={stats.sentReminders}
+          detail={
+            <span className="channel-summary">
+              <span>
+                <ChannelLabel channel="email" /> {stats.sentByChannel.email}
+              </span>
+              <span>
+                <ChannelLabel channel="whatsapp" /> {stats.sentByChannel.whatsapp}
+              </span>
+              <span>
+                <ChannelLabel channel="sms" /> {stats.sentByChannel.sms}
+              </span>
+            </span>
+          }
+        />
+        <StatCard
+          href="/dashboard/dues"
+          label="Total Outstanding"
+          value={formatCurrency(stats.totalOutstandingAmount)}
+        />
+        <StatCard
+          href="/dashboard/dues?status=sent#reminder-queue"
+          label="Today's Reminders"
+          value={stats.todayRemindersSent}
+        />
+        <StatCard
+          href="/dashboard/dues?status=sent#reminder-queue"
+          label="Success Rate"
+          value={`${stats.successRate}%`}
+        />
+        <StatCard
+          href="/dashboard/dues?status=failed#reminder-queue"
+          label="Failed Deliveries"
+          value={stats.failedDeliveries}
+          detail={`${stats.failureRate}% failure rate`}
+        />
       </section>
 
       <section className="content-grid">
@@ -141,8 +162,10 @@ export default async function DashboardOverview({
                   reminderLogs.map((log, index) => (
                     <tr key={log.id}>
                       <td>{index + 1}</td>
-                      <td className="capitalize">{log.channel}</td>
-                      <td>{log.recipient}</td>
+                      <td>
+                        <ChannelLabel channel={log.channel} />
+                      </td>
+                      <td>{isAdmin ? log.recipient : "Hidden"}</td>
                       <td className="capitalize">{log.status}</td>
                       <td>{formatDate(log.scheduledFor)}</td>
                     </tr>
@@ -154,6 +177,26 @@ export default async function DashboardOverview({
         </article>
       </section>
     </DashboardShell>
+  );
+}
+
+function StatCard({
+  href,
+  label,
+  value,
+  detail
+}: {
+  href: Route;
+  label: string;
+  value: string | number;
+  detail?: ReactNode;
+}) {
+  return (
+    <Link href={href} className="stat-card stat-card-link glass-panel">
+      <span className="stat-label">{label}</span>
+      <strong>{value}</strong>
+      {detail ? <span className="stat-detail">{detail}</span> : null}
+    </Link>
   );
 }
 

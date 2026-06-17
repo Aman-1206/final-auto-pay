@@ -275,6 +275,10 @@ function normalizeWhatsappAddressForTwilio(value: string) {
   return `whatsapp:${normalizePhoneNumberForTwilio(withoutPrefix)}`;
 }
 
+function isValidEmailAddress(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 function templateIncludesCashDiscountToken(template: string) {
   return /\{\{\s*cd(?:Message|ShortMessage|Summary|ShortSummary|Eligible|DiscountPercent|PolicyWindowDays|Reason)\s*\}\}/i.test(
     template
@@ -528,10 +532,16 @@ export async function getDashboardStats(ownerId: string): Promise<DashboardStats
       dueCount: 0,
       pendingReminders: 0,
       sentReminders: 0,
+      sentByChannel: {
+        email: 0,
+        whatsapp: 0,
+        sms: 0
+      },
       totalCompanies: 0,
       totalOutstandingAmount: 0,
       todayRemindersSent: 0,
       successRate: 0,
+      failureRate: 0,
       failedDeliveries: 0
     };
   }
@@ -539,10 +549,10 @@ export async function getDashboardStats(ownerId: string): Promise<DashboardStats
   const workspace = getCompanyWorkspaceContext(database, user.companyName);
   const reminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds);
   const dues = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds);
-  const delivered = reminderLogs.filter(
-    (entry) => entry.status === "sent" || entry.status === "simulated"
-  ).length;
+  const deliveredLogs = reminderLogs.filter((entry) => entry.status === "sent");
+  const delivered = deliveredLogs.length;
   const failed = reminderLogs.filter((entry) => entry.status === "failed").length;
+  const totalProcessed = delivered + failed;
   const today = new Date().toISOString().slice(0, 10);
 
   return {
@@ -550,14 +560,20 @@ export async function getDashboardStats(ownerId: string): Promise<DashboardStats
     dueCount: dues.length,
     pendingReminders: reminderLogs.filter((entry) => entry.status === "pending").length,
     sentReminders: delivered,
+    sentByChannel: {
+      email: deliveredLogs.filter((entry) => entry.channel === "email").length,
+      whatsapp: deliveredLogs.filter((entry) => entry.channel === "whatsapp").length,
+      sms: deliveredLogs.filter((entry) => entry.channel === "sms").length
+    },
     totalCompanies: new Set(dues.map((entry) => entry.companyName).filter(Boolean)).size,
     totalOutstandingAmount: dues.reduce((sum, entry) => sum + entry.amount, 0),
     todayRemindersSent: reminderLogs.filter(
       (entry) =>
-        (entry.status === "sent" || entry.status === "simulated") &&
+        entry.status === "sent" &&
         (entry.sentAt || entry.createdAt).slice(0, 10) === today
     ).length,
-    successRate: delivered + failed === 0 ? 0 : Math.round((delivered / (delivered + failed)) * 100),
+    successRate: totalProcessed === 0 ? 0 : Math.round((delivered / totalProcessed) * 100),
+    failureRate: totalProcessed === 0 ? 0 : Math.round((failed / totalProcessed) * 100),
     failedDeliveries: failed
   };
 }
@@ -1048,11 +1064,11 @@ async function deliverReminder(
   due?: DueRecord,
   allDuesForDealer: DueRecord[] = []
 ) {
-  if (settings.simulateMode) {
-    return "simulated" as const;
-  }
-
   if (log.channel === "email") {
+    if (!isValidEmailAddress(log.recipient)) {
+      throw new Error(`Invalid email recipient: ${log.recipient || "missing email address"}.`);
+    }
+
     if (!settings.smtpHost || !(settings.senderEmail || settings.smtpFrom)) {
       throw new Error("SMTP settings are incomplete.");
     }

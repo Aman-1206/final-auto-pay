@@ -82,7 +82,7 @@ export default async function ReportsPage({
             </div>
             <div className="stat-card">
               <span className="stat-label">Sent</span>
-              <strong>{logs.filter((entry) => entry.status === "sent" || entry.status === "simulated").length}</strong>
+              <strong>{logs.filter((entry) => entry.status === "sent").length}</strong>
             </div>
           </div>
         </article>

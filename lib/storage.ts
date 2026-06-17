@@ -209,7 +209,6 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
     dispatchSettings: Array.isArray(source.dispatchSettings)
       ? source.dispatchSettings.map((settings) => ({
           ownerId: toStringValue(settings?.ownerId),
-          simulateMode: toBooleanValue(settings?.simulateMode, true),
           smtpHost: toStringValue(settings?.smtpHost),
           smtpPort: toNumberValue(settings?.smtpPort, 587),
           smtpSecure: toBooleanValue(settings?.smtpSecure, false),
@@ -260,38 +259,42 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
         }))
       : [],
     reminderLogs: Array.isArray(source.reminderLogs)
-      ? source.reminderLogs.map((log) => ({
-          id: toStringValue(log?.id),
-          ownerId: toStringValue(log?.ownerId),
-          dueId: toStringValue(log?.dueId),
-          dedupeKey: toStringValue(log?.dedupeKey),
-          contactId: toStringValue(log?.contactId),
-          ruleId: toStringValue(log?.ruleId),
-          templateId: toStringValue(log?.templateId),
-          dealerCode: toStringValue(log?.dealerCode),
-          invoiceNumber: toStringValue(log?.invoiceNumber),
-          reminderDay: toNumberValue(log?.reminderDay),
-          billAgeDays: toNumberValue(log?.billAgeDays),
-          cdEligible: toBooleanValue(log?.cdEligible, false),
-          cdPolicyId: toStringValue(log?.cdPolicyId),
-          cdDiscountPercent: toNumberValue(log?.cdDiscountPercent),
-          cdReason: toStringValue(log?.cdReason),
-          channel:
-            log?.channel === "sms" || log?.channel === "whatsapp" ? log.channel : "email",
-          recipient: toStringValue(log?.recipient),
-          scheduledFor: toStringValue(log?.scheduledFor),
-          status:
-            log?.status === "sent" ||
-            log?.status === "failed" ||
-            log?.status === "simulated"
-              ? log.status
-              : "pending",
-          subject: toStringValue(log?.subject),
-          content: toStringValue(log?.content),
-          failureReason: toStringValue(log?.failureReason),
-          sentAt: toStringValue(log?.sentAt),
-          createdAt: toStringValue(log?.createdAt)
-        }))
+      ? source.reminderLogs.map((log) => {
+          const rawStatus = (log as Record<string, unknown>)?.status;
+
+          return {
+            id: toStringValue(log?.id),
+            ownerId: toStringValue(log?.ownerId),
+            dueId: toStringValue(log?.dueId),
+            dedupeKey: toStringValue(log?.dedupeKey),
+            contactId: toStringValue(log?.contactId),
+            ruleId: toStringValue(log?.ruleId),
+            templateId: toStringValue(log?.templateId),
+            dealerCode: toStringValue(log?.dealerCode),
+            invoiceNumber: toStringValue(log?.invoiceNumber),
+            reminderDay: toNumberValue(log?.reminderDay),
+            billAgeDays: toNumberValue(log?.billAgeDays),
+            cdEligible: toBooleanValue(log?.cdEligible, false),
+            cdPolicyId: toStringValue(log?.cdPolicyId),
+            cdDiscountPercent: toNumberValue(log?.cdDiscountPercent),
+            cdReason: toStringValue(log?.cdReason),
+            channel:
+              log?.channel === "sms" || log?.channel === "whatsapp" ? log.channel : "email",
+            recipient: toStringValue(log?.recipient),
+            scheduledFor: toStringValue(log?.scheduledFor),
+            status:
+              rawStatus === "sent" || rawStatus === "failed"
+                ? rawStatus
+                : rawStatus === "simulated"
+                  ? "sent"
+                  : "pending",
+            subject: toStringValue(log?.subject),
+            content: toStringValue(log?.content),
+            failureReason: toStringValue(log?.failureReason),
+            sentAt: toStringValue(log?.sentAt),
+            createdAt: toStringValue(log?.createdAt)
+          };
+        })
       : []
     ,
     operationPasswords: Array.isArray(source.operationPasswords)

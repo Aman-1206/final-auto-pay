@@ -28,7 +28,7 @@ export default async function AdminPanelPage({
   const workspace = getCompanyWorkspaceContextForUser(database, user);
   const dues = database.dueRecords.filter((entry) => workspace.sharedOwnerIds.has(entry.ownerId));
   const logs = database.reminderLogs.filter((entry) => workspace.sharedOwnerIds.has(entry.ownerId));
-  const sent = logs.filter((entry) => entry.status === "sent" || entry.status === "simulated").length;
+  const sent = logs.filter((entry) => entry.status === "sent").length;
   const failed = logs.filter((entry) => entry.status === "failed").length;
 
   return (

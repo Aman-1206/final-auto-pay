@@ -27,8 +27,8 @@ export async function POST(request: Request) {
     return NextResponse.redirect(
       new URL(
         `/dashboard/settings/reports?message=${encodeURIComponent(
-          result.simulated
-            ? `Report generated in simulate mode for ${result.report.date}.`
+          result.skipped
+            ? `Report generated for ${result.report.date}. Add report recipients in Email Configuration to send it by email.`
             : `Report sent to ${result.recipientCount} recipient${result.recipientCount === 1 ? "" : "s"}.`
         )}`,
         request.url

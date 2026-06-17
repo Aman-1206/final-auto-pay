@@ -25,7 +25,6 @@ export async function POST(request: Request) {
         : "daily";
     const nextValues: DispatchSettings = {
       ownerId: workspace.configOwnerId,
-      simulateMode: formData.get("simulateMode") === "on",
       smtpHost: String(formData.get("smtpHost") || "").trim(),
       smtpPort: Number(formData.get("smtpPort") || 587),
       smtpSecure: formData.get("smtpSecure") === "on",

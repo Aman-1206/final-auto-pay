@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { requireAdminUser } from "@/lib/auth";
+import { requireSuperAdminUser } from "@/lib/access-control";
 import { getCompanyWorkspaceContext, getCompanyWorkspaceId } from "@/lib/company-workspace";
 import { deleteStoredWorkbook } from "@/lib/excel";
 import { updateDatabase } from "@/lib/storage";
 
 export async function POST(request: Request) {
-  const user = await requireAdminUser();
+  const user = await requireSuperAdminUser();
   const workspaceId = getCompanyWorkspaceId(user.companyName);
 
   try {

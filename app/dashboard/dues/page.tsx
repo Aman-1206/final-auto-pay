@@ -1,5 +1,7 @@
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { ChannelLabel, formatChannelLabel } from "@/components/channel-label";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { GenerationDateField } from "@/components/generation-date-field";
 import { ProtectedSubmitButton } from "@/components/protected-submit-button";
 import { TableSearch } from "@/components/table-search";
 import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
@@ -18,6 +20,15 @@ export default async function DuesPage({
   const user = await requireUser();
   const [database, params] = await Promise.all([readDatabase(), searchParams]);
   const workspace = getCompanyWorkspaceContextForUser(database, user);
+  const isAdmin = isAdminUser(user);
+  const statusFilter =
+    params.status === "sent" || params.status === "failed" || params.status === "pending"
+      ? params.status
+      : "";
+  const channelFilter =
+    params.channel === "email" || params.channel === "whatsapp" || params.channel === "sms"
+      ? params.channel
+      : "";
   const dueRecords = filterSharedCompanyRecords(database.dueRecords, workspace.sharedOwnerIds)
     .sort((left, right) => left.dueDate.localeCompare(right.dueDate));
   const masterContacts = filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds);
@@ -27,8 +38,17 @@ export default async function DuesPage({
   const rules = database.reminderRules
     .filter((entry) => entry.ownerId === workspace.configOwnerId)
     .sort((left, right) => left.triggerDay - right.triggerDay);
-  const reminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)
+  const allReminderLogs = filterSharedCompanyRecords(database.reminderLogs, workspace.sharedOwnerIds)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const today = new Date().toISOString().slice(0, 10);
+  const todayGeneratedLogs = allReminderLogs.filter(
+    (entry) => entry.scheduledFor.slice(0, 10) === today
+  );
+  const reminderLogs = allReminderLogs.filter(
+    (entry) =>
+      (!statusFilter || entry.status === statusFilter) &&
+      (!channelFilter || entry.channel === channelFilter)
+  );
   const canDispatch = canDispatchReminders(user);
 
   if (dueRecords.length > 0) {
@@ -41,7 +61,7 @@ export default async function DuesPage({
       description="Upload your latest dues sheet once for the whole company, keep it in sync with master contacts, then choose when to generate and send reminders."
       companyName={user.companyName}
       userName={user.name}
-      isAdmin={isAdminUser(user)}
+      isAdmin={isAdmin}
       userRole={user.role}
       canSendManualReminders={user.canSendManualReminders}
     >
@@ -128,10 +148,8 @@ export default async function DuesPage({
           ) : (
             <div className="stacked-layout">
               <form action="/api/reminders/generate" method="post" className="dispatch-form">
-                <label className="field">
-                  <span>Generation date</span>
-                  <input name="generationDate" type="date" />
-                </label>
+                <GenerationDateField />
+                <TodayGenerationNotice count={todayGeneratedLogs.length} />
                 <label className="field">
                   <span>Dispatch password</span>
                   <input name="operationPassword" type="password" minLength={8} placeholder="At least 8 characters" />
@@ -310,11 +328,21 @@ export default async function DuesPage({
           )}
         </article>
 
-        <article className="glass-panel rule-span">
+        <article id="reminder-queue" className="glass-panel rule-span">
           <div className="section-heading">
             <h2>Reminder queue</h2>
-            <p>Latest generated, sent, simulated, and failed reminder records.</p>
+            <p>
+              {statusFilter || channelFilter
+                ? `Showing ${reminderLogs.length} reminder${reminderLogs.length === 1 ? "" : "s"}${statusFilter ? ` with ${statusFilter} status` : ""}${channelFilter ? ` on ${formatChannelLabel(channelFilter)}` : ""}.`
+                : "Latest generated, sent, and failed reminder records."}
+            </p>
           </div>
+
+          {statusFilter || channelFilter ? (
+            <a className="button button-secondary" href="/dashboard/dues#reminder-queue">
+              Clear queue filter
+            </a>
+          ) : null}
 
           <TableSearch label="Search reminder queue" />
           <div className="table-wrap">
@@ -334,7 +362,11 @@ export default async function DuesPage({
               <tbody>
                 {reminderLogs.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>No reminders have been generated yet.</td>
+                    <td colSpan={8}>
+                      {statusFilter || channelFilter
+                        ? "No reminder records match this filter."
+                        : "No reminders have been generated yet."}
+                    </td>
                   </tr>
                 ) : (
                   reminderLogs.slice(0, 100).map((log, index) => (
@@ -342,8 +374,10 @@ export default async function DuesPage({
                       <td>{index + 1}</td>
                       <td>{log.invoiceNumber || "N/A"}</td>
                       <td>{log.dealerCode || "N/A"}</td>
-                      <td className="capitalize">{log.channel}</td>
-                      <td>{log.recipient || "N/A"}</td>
+                      <td>
+                        <ChannelLabel channel={log.channel} />
+                      </td>
+                      <td>{isAdmin ? log.recipient || "N/A" : "Hidden"}</td>
                       <td className="capitalize">{log.status}</td>
                       <td>{formatDate(log.scheduledFor)}</td>
                       <td>{log.failureReason || "-"}</td>
@@ -398,6 +432,19 @@ export default async function DuesPage({
         </article>
       </section>
     </DashboardShell>
+  );
+}
+
+function TodayGenerationNotice({ count }: { count: number }) {
+  if (count === 0) {
+    return null;
+  }
+
+  return (
+    <p className="status-banner status-warning">
+      Today&apos;s reminders are already generated: {count} queue record{count === 1 ? "" : "s"}.
+      Generating again will skip duplicate invoice, rule, channel, and date combinations.
+    </p>
   );
 }
 

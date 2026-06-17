@@ -1,5 +1,6 @@
 "use client";
 
+import { ChannelLabel } from "@/components/channel-label";
 import { useEffect, useState, useTransition } from "react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
@@ -52,7 +53,12 @@ export function DashboardClientShell({
   );
   const navItems: Array<{ href: Route; label: string }> = [
     { href: "/dashboard", label: "Dashboard" },
-    { href: "/dashboard/master", label: "Master Database" },
+    ...(isAdmin
+      ? ([{ href: "/dashboard/master", label: "Master Database" }] satisfies Array<{
+          href: Route;
+          label: string;
+        }>)
+      : []),
     ...(canUseDues
       ? ([{ href: "/dashboard/dues", label: "Dues & Dispatch" }] satisfies Array<{
           href: Route;
@@ -143,9 +149,9 @@ export function DashboardClientShell({
           </div>
 
           <div className="hero-badge-cluster" aria-hidden="true">
-            <span className="hero-badge">Fast switching</span>
-            <span className="hero-badge">Live reminders</span>
-            <span className="hero-badge">Clean uploads</span>
+            <ChannelLabel channel="email" />
+            <ChannelLabel channel="whatsapp" />
+            <ChannelLabel channel="sms" />
           </div>
         </section>
 
@@ -184,23 +190,9 @@ export function DashboardClientShell({
 
           {isPending ? (
             <div className="route-loading-overlay" aria-live="polite" aria-busy="true">
-              <div className="route-loading-card">
-                <div className="route-loading-head">
-                  <span className="route-loading-dot" />
-                  <p>Loading next workspace...</p>
-                </div>
-
-                <div className="route-loading-grid">
-                  <div className="skeleton-block skeleton-stat" />
-                  <div className="skeleton-block skeleton-stat" />
-                  <div className="skeleton-block skeleton-stat" />
-                  <div className="skeleton-block skeleton-stat" />
-                </div>
-
-                <div className="route-loading-stack">
-                  <div className="skeleton-block skeleton-panel" />
-                  <div className="skeleton-block skeleton-panel" />
-                </div>
+              <div className="route-loading-strip">
+                <span className="route-loading-dot" />
+                <span>Loading workspace</span>
               </div>
             </div>
           ) : null}

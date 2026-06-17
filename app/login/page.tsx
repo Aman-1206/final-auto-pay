@@ -39,7 +39,7 @@ export default function LoginPage({
             <div className="auth-bullet-list">
               <span>Upload master contacts and dues without changing your team workflow.</span>
               <span>Generate reminders from day-based rules before going live.</span>
-              <span>Use simulate mode while checking templates and provider settings.</span>
+              <span>Check templates and provider settings before sending live reminders.</span>
             </div>
           </div>
         </aside>

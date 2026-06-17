@@ -10,7 +10,7 @@ A Next.js 16 app for uploading a master contact database and a changing dues she
 - Automatic reminder checking whenever a new dues file is uploaded
 - Flexible reminder rules like 30, 45, and 90 days before due date
 - Editable templates for email, WhatsApp, and SMS
-- Dispatch center with simulate mode, SMTP email, Twilio SMS, and Twilio WhatsApp delivery
+- Dispatch center with SMTP email, Twilio SMS, and Twilio WhatsApp delivery
 - MongoDB-backed persistence for users, uploads, rules, templates, and reminder logs
 
 ## Expected Excel headers
@@ -63,7 +63,7 @@ Open `http://localhost:3000`.
 
 - The app now requires `MONGODB_URI` and `MONGODB_DB` in `.env.local`.
 - If an old `data/app-db.json` file exists, the app seeds MongoDB from it the first time the MongoDB state document is created.
-- New accounts start in simulate mode for safe testing.
+- New accounts start with editable provider settings before live sending.
 - Dues uploads are the main trigger for reminder generation, so you do not need a daily check to keep the queue updated.
 - SMS and WhatsApp sending use Twilio.
 - For production, move passwords and provider credentials to a secure database or secret manager.

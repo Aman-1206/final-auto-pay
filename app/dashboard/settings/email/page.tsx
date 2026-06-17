@@ -33,10 +33,6 @@ export default async function EmailConfigurationPage({
 
       <article className="glass-panel">
         <form action="/api/providers/save" method="post" className="rule-grid">
-          <label className="checkbox-field dispatch-check rule-span">
-            <input name="simulateMode" type="checkbox" defaultChecked={settings.simulateMode} />
-            <span>Simulate mode</span>
-          </label>
           <label className="field">
             <span>Sender email</span>
             <input name="senderEmail" type="email" defaultValue={settings.senderEmail || settings.smtpFrom} />

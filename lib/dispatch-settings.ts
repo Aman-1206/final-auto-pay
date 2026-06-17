@@ -1,13 +1,5 @@
 import type { DispatchSettings } from "@/lib/types";
 
-function toBoolean(value: string | undefined, fallback: boolean) {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  return value.toLowerCase() === "true";
-}
-
 export function isE164PhoneNumber(value: string) {
   return /^\+[1-9]\d{7,14}$/.test(value.trim());
 }
@@ -30,10 +22,9 @@ export function resolveDispatchSettings(
 
   return {
     ownerId: settings?.ownerId || "",
-    simulateMode: settings?.simulateMode ?? toBoolean(process.env.REMINDER_SIMULATE_MODE, true),
     smtpHost: settings?.smtpHost || process.env.SMTP_HOST || "",
     smtpPort: settings?.smtpPort || Number(process.env.SMTP_PORT || 587),
-    smtpSecure: settings?.smtpSecure ?? toBoolean(process.env.SMTP_SECURE, false),
+    smtpSecure: settings?.smtpSecure ?? process.env.SMTP_SECURE?.toLowerCase() === "true",
     smtpUser: settings?.smtpUser || process.env.SMTP_USER || "",
     smtpPass: settings?.smtpPass || process.env.SMTP_PASS || "",
     senderEmail: savedSenderEmail || process.env.SMTP_FROM || "",

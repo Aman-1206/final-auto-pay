@@ -28,7 +28,7 @@ export default function SignupPage({
             <div className="auth-bullet-list">
               <span>Starter reminder rules are created for you automatically.</span>
               <span>Email, WhatsApp, and SMS templates stay editable after setup.</span>
-              <span>Dispatch settings can stay in simulate mode until you are ready.</span>
+              <span>Dispatch settings stay editable before your first live send.</span>
             </div>
           </div>
         </aside>

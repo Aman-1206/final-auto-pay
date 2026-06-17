@@ -2,6 +2,7 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { ProtectedSubmitButton } from "@/components/protected-submit-button";
 import { TableSearch } from "@/components/table-search";
+import { isSuperAdminUser } from "@/lib/access-control";
 import { filterSharedCompanyRecords, getCompanyWorkspaceContextForUser } from "@/lib/company-workspace";
 import { isAdminUser, requireUser } from "@/lib/auth";
 import { readDatabase } from "@/lib/storage";
@@ -18,8 +19,9 @@ export default async function MasterDatabasePage({
   const workspace = getCompanyWorkspaceContextForUser(database, user);
   const contacts = filterSharedCompanyRecords(database.masterContacts, workspace.sharedOwnerIds);
   const isAdmin = isAdminUser(user);
+  const isSuperAdmin = isSuperAdminUser(user);
 
-  if (contacts.length > 0) {
+  if (isAdmin && contacts.length > 0) {
     await ensureStoredMasterWorkbook(workspace.workspaceId, user.companyName);
   }
 
@@ -80,7 +82,7 @@ export default async function MasterDatabasePage({
               </div>
             </form>
 
-            {contacts.length > 0 ? (
+            {isSuperAdmin && contacts.length > 0 ? (
               <form action="/api/master/delete" method="post" className="compact-form">
                 <ConfirmSubmitButton
                   className="button button-danger"
@@ -96,114 +98,103 @@ export default async function MasterDatabasePage({
             <div className="section-heading">
               <h2>Admin-managed master database</h2>
               <p>
-                Master contact uploads are restricted to admins. You can still view the shared
-                company contacts below.
+                Master contact uploads and contact previews are restricted to admins.
               </p>
             </div>
           </article>
         )}
 
-        <article className="glass-panel">
-          <div className="section-heading">
-            <h2>Current contacts</h2>
-            <p>{contacts.length} shared records available for reminder matching.</p>
-          </div>
+        {isAdmin ? (
+          <article className="glass-panel">
+            <div className="section-heading">
+              <h2>Current contacts</h2>
+              <p>{contacts.length} shared records available for reminder matching.</p>
+            </div>
 
-          <TableSearch />
+            <TableSearch />
 
-          <div className="table-wrap">
-            <table data-searchable-table>
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Dealer code</th>
-                  <th>Company</th>
-                  <th>Primary contact</th>
-                  <th>Salesperson</th>
-                  <th>Email</th>
-                  <th>WhatsApp</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {contacts.length === 0 ? (
+            <div className="table-wrap">
+              <table data-searchable-table>
+                <thead>
                   <tr>
-                    <td colSpan={8}>
-                      {isAdmin
-                        ? "Upload a master file to populate contacts."
-                        : "An admin needs to upload a master file to populate shared contacts."}
-                    </td>
+                    <th>No.</th>
+                    <th>Dealer code</th>
+                    <th>Company</th>
+                    <th>Primary contact</th>
+                    <th>Salesperson</th>
+                    <th>Email</th>
+                    <th>WhatsApp</th>
+                    <th>Updated</th>
                   </tr>
-                ) : (
-                  contacts.slice(0, 20).map((contact, index) => (
-                    <tr key={contact.id}>
-                      <td>{index + 1}</td>
-                      <td>{contact.dealerCode || contact.customerCode || "N/A"}</td>
-                      <td>{contact.companyName}</td>
-                      <td>{contact.primaryContact || "N/A"}</td>
-                      <td>{contact.salespersonName || contact.salespersonEmail || "Unassigned"}</td>
-                      <td>{contact.email || "N/A"}</td>
-                      <td>{contact.whatsapp || contact.sms || "N/A"}</td>
-                      <td>{formatDate(contact.importedAt)}</td>
+                </thead>
+                <tbody>
+                  {contacts.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>Upload a master file to populate contacts.</td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </article>
+                  ) : (
+                    contacts.slice(0, 20).map((contact, index) => (
+                      <tr key={contact.id}>
+                        <td>{index + 1}</td>
+                        <td>{contact.dealerCode || contact.customerCode || "N/A"}</td>
+                        <td>{contact.companyName}</td>
+                        <td>{contact.primaryContact || "N/A"}</td>
+                        <td>{contact.salespersonName || contact.salespersonEmail || "Unassigned"}</td>
+                        <td>{contact.email || "N/A"}</td>
+                        <td>{contact.whatsapp || contact.sms || "N/A"}</td>
+                        <td>{formatDate(contact.importedAt)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        ) : null}
 
-        <article className="glass-panel rule-span">
+        {isAdmin ? (
+          <article className="glass-panel rule-span">
           <div className="section-heading">
             <h2>Edit outside the app</h2>
             <p>
-              {isAdmin
-                ? "The row-by-row workbook editor has been removed. Download the current file, edit it in Excel or Google Sheets, then upload it back here when you are ready."
-                : "Admins can download the current shared file, edit it in Excel or Google Sheets, then upload it back when updates are ready."}
+              The row-by-row workbook editor has been removed. Download the current file, edit it
+              in Excel or Google Sheets, then upload it back here when you are ready.
             </p>
           </div>
 
           {contacts.length === 0 ? (
             <p className="muted-copy">
-              {isAdmin
-                ? "Upload a master file first, then you can download it, edit it outside the app, and re-upload the updated version."
-                : "Ask an admin to upload the first master file before this shared workbook can be managed."}
+              Upload a master file first, then you can download it, edit it outside the app, and
+              re-upload the updated version.
             </p>
           ) : (
             <div className="stacked-layout">
-              {isAdmin ? (
-                <>
-                  <p className="muted-copy">
-                    If you want browser editing, import the downloaded file into Google Sheets,
-                    make your changes there, then export it again as `.xlsx` or `.csv` and upload
-                    it here using replace mode.
-                  </p>
+              <p className="muted-copy">
+                If you want browser editing, import the downloaded file into Google Sheets, make
+                your changes there, then export it again as `.xlsx` or `.csv` and upload it here
+                using replace mode.
+              </p>
 
-                  <div className="button-row">
-                    <a className="button button-secondary" href="/api/master/download">
-                      Download current master file
-                    </a>
+              <div className="button-row">
+                <a className="button button-secondary" href="/api/master/download">
+                  Download current master file
+                </a>
 
-                    <form action="/api/master/refresh" method="post">
-                      <button className="button button-secondary" type="submit">
-                        Refresh from stored file
-                      </button>
-                    </form>
-                  </div>
+                <form action="/api/master/refresh" method="post">
+                  <button className="button button-secondary" type="submit">
+                    Refresh from stored file
+                  </button>
+                </form>
+              </div>
 
-                  <p className="muted-copy">
-                    Use `Replace existing master records` when re-uploading your edited file so the
-                    app fully re-syncs the latest version.
-                  </p>
-                </>
-              ) : (
-                <p className="muted-copy">
-                  Contact your admin if this shared master database needs downloading or updating.
-                </p>
-              )}
+              <p className="muted-copy">
+                Use `Replace existing master records` when re-uploading your edited file so the app
+                fully re-syncs the latest version.
+              </p>
             </div>
           )}
-        </article>
+          </article>
+        ) : null}
       </section>
     </DashboardShell>
   );

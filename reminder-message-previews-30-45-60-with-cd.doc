@@ -1,0 +1,88 @@
+<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Reminder Message Previews</title>
+        <style>
+          body { font-family: Arial, sans-serif; color: #111827; line-height: 1.45; }
+          h1 { font-size: 26px; }
+          h2 { font-size: 21px; margin-top: 28px; border-bottom: 1px solid #d1d5db; padding-bottom: 6px; }
+          h3 { font-size: 16px; margin-top: 18px; color: #0f766e; }
+          .meta { background: #f3f4f6; border: 1px solid #d1d5db; padding: 12px; margin: 12px 0 20px; }
+          .message { border: 1px solid #d1d5db; background: #ffffff; padding: 12px; margin: 8px 0 16px; }
+          .muted { color: #6b7280; }
+        </style>
+      </head>
+      <body>
+        <h1>Reminder Message Previews - Email, WhatsApp, SMS</h1>
+        <div class="meta">
+          <p><b>Company:</b> University of Delhi</p>
+          <p><b>Config owner used by current shared generator:</b> Aman kumar Sah (super_admin)</p>
+          <p><b>Generated:</b> 17/6/2026, 10:18:24 am</p>
+          <p><b>Preview assumption:</b> CD eligible customer, no older unpaid invoice, sample invoice amount ₹25,000.00.</p>
+          <p><b>Important:</b> These previews apply the same template fill and automatic payment-summary append logic used by the sending code.</p>
+        </div>
+        
+    <h2>30 Day - 30 Day Reminder</h2>
+    <p>
+      <b>Active in current shared generation:</b> Yes<br>
+      <b>CD used in preview:</b> 2% within 30 days<br>
+      <b>Note:</b> This rule is available to the current shared reminder generator.
+    </p>
+    
+          <h3>Email (enabled)</h3>
+          <p><b>Subject/label:</b> Payment reminder: invoice INV-30-001 now at 30 days</p>
+          <div class="message">Dear Accounts Team,<br><br>This is a reminder for invoice INV-30-001 dated 18 May 2026 for Sample Dealer Pvt Ltd with pending amount ₹25,000.00.<br>Reference number: REF-30-001.<br><br>The bill has now aged 30 days, and this reminder was triggered by your day 30 rule.<br><br>Since no older unpaid bill is pending for your account, we are giving you CD of 2% if this invoice is cleared within 30 days.<br><br>If payment is already scheduled, please ignore this note. Otherwise, feel free to reply if you need any supporting documents.<br><br>Regards,<br>University of Delhi<br><br>Payment Summary:<br>Current invoice due: ₹25,000.00<br>Previous due: ₹0.00<br>Total due: ₹25,000.00</div>
+        
+          <h3>WhatsApp (enabled)</h3>
+          <p><b>Subject/label:</b> 30 Day Reminder reminder</p>
+          <div class="message">Hello Accounts Team, invoice INV-30-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-30-001. The bill is now 30 days old. Since no older unpaid bill is pending, we are giving you CD of 2% if paid within 30 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+          <h3>SMS (disabled / not sent unless enabled)</h3>
+          <p><b>Subject/label:</b> 30 Day Reminder reminder</p>
+          <div class="message">Reminder: invoice INV-30-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-30-001. The bill is now 30 days old. Since no older unpaid bill is pending, we are giving you CD of 2% if paid within 30 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+  
+    <h2>45 Day - 45 Day Follow Up</h2>
+    <p>
+      <b>Active in current shared generation:</b> No<br>
+      <b>CD used in preview:</b> 1% within 60 days<br>
+      <b>Note:</b> This rule/template exists, but it is not owned by the current shared config owner, so automatic generation will not use it right now.
+    </p>
+    
+          <h3>Email (enabled)</h3>
+          <p><b>Subject/label:</b> Payment reminder: invoice INV-45-001 now at 45 days</p>
+          <div class="message">Dear Accounts Team<br><br>This is a reminder for invoice INV-45-001 dated 18 May 2026 for Sample Dealer Pvt Ltd with pending amount ₹25,000.00.<br>Reference number: REF-45-001.<br><br>The bill has now aged 45 days, and this reminder was triggered by your day 45 rule.<br><br>Since no older unpaid bill is pending for your account, we are giving you CD of 1% if this invoice is cleared within 60 days.<br><br>If payment is already scheduled, please ignore this note. Otherwise, feel free to reply if you need any supporting documents.<br><br>Regards,<br>University of Delhi<br><br>Payment Summary:<br>Current invoice due: ₹25,000.00<br>Previous due: ₹0.00<br>Total due: ₹25,000.00</div>
+        
+          <h3>WhatsApp (enabled)</h3>
+          <p><b>Subject/label:</b> 45 Day Follow Up reminder</p>
+          <div class="message">Hello Accounts Team, invoice INV-45-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-45-001. The bill is now 45 days old. Since no older unpaid bill is pending, we are giving you CD of 1% if paid within 60 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+          <h3>SMS (disabled / not sent unless enabled)</h3>
+          <p><b>Subject/label:</b> 45 Day Follow Up reminder</p>
+          <div class="message">Reminder: invoice INV-45-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-45-001. The bill is now 45 days old. Since no older unpaid bill is pending, we are giving you CD of 1% if paid within 60 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+  
+    <h2>60 Day - 60 Day Reminder</h2>
+    <p>
+      <b>Active in current shared generation:</b> Yes<br>
+      <b>CD used in preview:</b> 1% within 60 days<br>
+      <b>Note:</b> This rule is available to the current shared reminder generator.
+    </p>
+    
+          <h3>Email (enabled)</h3>
+          <p><b>Subject/label:</b> Payment reminder: invoice INV-60-001 now at 60 days</p>
+          <div class="message">Dear Accounts Team,<br><br>This is a reminder for invoice INV-60-001 dated 18 May 2026 for Sample Dealer Pvt Ltd with pending amount ₹25,000.00.<br>Reference number: REF-60-001.<br><br>The bill has now aged 60 days, and this reminder was triggered by your day 60 rule.<br><br>Since no older unpaid bill is pending for your account, we are giving you CD of 1% if this invoice is cleared within 60 days.<br><br>If payment is already scheduled, please ignore this note. Otherwise, feel free to reply if you need any supporting documents.<br><br>Regards,<br>University of Delhi<br><br>Payment Summary:<br>Current invoice due: ₹25,000.00<br>Previous due: ₹0.00<br>Total due: ₹25,000.00</div>
+        
+          <h3>WhatsApp (enabled)</h3>
+          <p><b>Subject/label:</b> 60 Day Reminder reminder</p>
+          <div class="message">Hello Accounts Team, invoice INV-60-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-60-001. The bill is now 60 days old. Since no older unpaid bill is pending, we are giving you CD of 1% if paid within 60 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+          <h3>SMS (disabled / not sent unless enabled)</h3>
+          <p><b>Subject/label:</b> 60 Day Reminder reminder</p>
+          <div class="message">Reminder: invoice INV-60-001 for Sample Dealer Pvt Ltd has pending amount ₹25,000.00. Ref: REF-60-001. The bill is now 60 days old. Since no older unpaid bill is pending, we are giving you CD of 1% if paid within 60 days. Current invoice due: ₹25,000.00. Previous due: ₹0.00. Total due: ₹25,000.00.</div>
+        
+  
+        <p class="muted">End of document.</p>
+      </body>
+    </html>

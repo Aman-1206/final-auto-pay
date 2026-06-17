@@ -53,8 +53,8 @@ async function sendReportEmail(
   text: string,
   html?: string
 ) {
-  if (settings.simulateMode || to.length === 0) {
-    return { simulated: true, recipientCount: to.length };
+  if (to.length === 0) {
+    return { skipped: true, recipientCount: 0 };
   }
 
   if (!settings.smtpHost || !(settings.senderEmail || settings.smtpFrom)) {
@@ -81,7 +81,7 @@ async function sendReportEmail(
     html
   });
 
-  return { simulated: false, recipientCount: to.length };
+  return { skipped: false, recipientCount: to.length };
 }
 
 function buildMetricCard(label: string, value: string | number, accent = "#0f766e") {
@@ -141,7 +141,7 @@ function buildDailyActivityReportHtml(input: {
   } = input;
   const reportDate = new Date(day);
   const currency = dues[0]?.currency || "INR";
-  const sentLogs = todayLogs.filter((entry) => entry.status === "sent" || entry.status === "simulated");
+  const sentLogs = todayLogs.filter((entry) => entry.status === "sent");
   const whatsappSuccess = sentLogs.filter((entry) => entry.channel === "whatsapp").length;
   const whatsappFailed = todayLogs.filter((entry) => entry.channel === "whatsapp" && entry.status === "failed").length;
   const emailSuccess = sentLogs.filter((entry) => entry.channel === "email").length;
@@ -298,7 +298,7 @@ export async function buildDailyActivityReport(user: ReportUser, reportDate = ne
     .sort((left, right) => right.maxOverdueDays - left.maxOverdueDays || right.amount - left.amount)
     .slice(0, 10);
   const overdueDues = dues.filter((entry) => getOverdueDays(entry, reportDate) > 0);
-  const sentLogs = todayLogs.filter((entry) => entry.status === "sent" || entry.status === "simulated");
+  const sentLogs = todayLogs.filter((entry) => entry.status === "sent");
 
   const lines = [
     `Daily Activity Report - ${day}`,
@@ -307,9 +307,9 @@ export async function buildDailyActivityReport(user: ReportUser, reportDate = ne
     `Total Companies Processed: ${new Set(dues.map((entry) => entry.companyName).filter(Boolean)).size}`,
     `Total Due Records: ${dues.length}`,
     `Total Reminders Sent: ${sentLogs.length}`,
-    `WhatsApp Success Count: ${todayLogs.filter((entry) => entry.channel === "whatsapp" && (entry.status === "sent" || entry.status === "simulated")).length}`,
+    `WhatsApp Success Count: ${todayLogs.filter((entry) => entry.channel === "whatsapp" && entry.status === "sent").length}`,
     `WhatsApp Failure Count: ${todayLogs.filter((entry) => entry.channel === "whatsapp" && entry.status === "failed").length}`,
-    `Email Success Count: ${todayLogs.filter((entry) => entry.channel === "email" && (entry.status === "sent" || entry.status === "simulated")).length}`,
+    `Email Success Count: ${todayLogs.filter((entry) => entry.channel === "email" && entry.status === "sent").length}`,
     `Email Failure Count: ${todayLogs.filter((entry) => entry.channel === "email" && entry.status === "failed").length}`,
     `Total Outstanding Amount: ${formatCurrency(dues.reduce((sum, entry) => sum + entry.amount, 0), dues[0]?.currency || "INR")}`,
     `Overdue Invoices: ${overdueDues.length}`,
@@ -513,7 +513,7 @@ export async function sendSalespersonSummaries(user: ReportUser, sentLogs: Remin
     dues.filter((entry) => entry.salespersonEmail),
     (entry) => entry.salespersonEmail
   );
-  const results: Array<{ email: string; simulated: boolean; recipientCount: number }> = [];
+  const results: Array<{ email: string; skipped: boolean; recipientCount: number }> = [];
 
   for (const [email, records] of groups.entries()) {
     const name = records[0]?.salespersonName || email;

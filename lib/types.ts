@@ -121,7 +121,6 @@ export type ReminderTemplate = {
 
 export type DispatchSettings = {
   ownerId: string;
-  simulateMode: boolean;
   smtpHost: string;
   smtpPort: number;
   smtpSecure: boolean;
@@ -182,7 +181,7 @@ export type ReminderLog = {
   channel: "email" | "whatsapp" | "sms";
   recipient: string;
   scheduledFor: string;
-  status: "pending" | "simulated" | "sent" | "failed";
+  status: "pending" | "sent" | "failed";
   subject: string;
   content: string;
   failureReason: string;
@@ -252,9 +251,15 @@ export type DashboardStats = {
   dueCount: number;
   pendingReminders: number;
   sentReminders: number;
+  sentByChannel: {
+    email: number;
+    whatsapp: number;
+    sms: number;
+  };
   totalCompanies: number;
   totalOutstandingAmount: number;
   todayRemindersSent: number;
   successRate: number;
+  failureRate: number;
   failedDeliveries: number;
 };

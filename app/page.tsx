@@ -15,7 +15,7 @@ const featureCards = [
   },
   {
     title: "Dispatch Review Before Send",
-    text: "Preview generated reminders, test in simulate mode, and send only when the queue looks correct."
+    text: "Preview generated reminders and send only when the queue looks correct."
   }
 ];
 
@@ -36,7 +36,7 @@ const workflowSteps = [
   },
   {
     title: "Generate, review, dispatch",
-    text: "Create reminders using your day rules, review what will be sent, then trigger live or simulated dispatch."
+    text: "Create reminders using your day rules, review what will be sent, then trigger live dispatch."
   }
 ];
 
@@ -94,7 +94,7 @@ export default function HomePage() {
           <div className="hero-badge-row">
             <span className="badge-pill">Master database sync</span>
             <span className="badge-pill">Multi-channel reminders</span>
-            <span className="badge-pill">Manual and simulated dispatch</span>
+            <span className="badge-pill">Manual live dispatch</span>
           </div>
         </div>
 
