@@ -19,12 +19,7 @@ const sampleWorkbooks: Record<SampleWorkbookKind, SampleWorkbookConfig> = {
         "Contact Person": "Ravi Sharma",
         Email: "accounts@exampletrading.com",
         WhatsApp: "919876543210",
-        Phone: "919876543210",
-        "Alternate Contact": "919812345670",
-        Notes: "Primary billing contact",
-        "Salesperson ID": "SP-001",
-        Salesperson: "Aman Kumar",
-        "Salesperson Email": "aman@example.com"
+        Phone: "919876543210"
       }
     ]
   },
@@ -41,13 +36,7 @@ const sampleWorkbooks: Record<SampleWorkbookKind, SampleWorkbookConfig> = {
         "Opening Amount": 50000,
         "Pending Amount": 35000,
         Currency: "INR",
-        "Overdue by days": 0,
-        Reference: "PO-7788",
-        Notes: "First reminder eligible after due date",
-        "Total Due Amount": 35000,
-        "Salesperson ID": "SP-001",
-        Salesperson: "Aman Kumar",
-        "Salesperson Email": "aman@example.com"
+        "Overdue by days": 0
       }
     ]
   },
