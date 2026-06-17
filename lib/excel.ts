@@ -1,4 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
@@ -591,7 +592,13 @@ function getWorkbookDirectoryName(ownerId: string) {
 }
 
 function getWorkbookDirectory(ownerId: string) {
-  return path.join(process.cwd(), "data", "workbooks", getWorkbookDirectoryName(ownerId));
+  const storageRoot =
+    process.env.WORKBOOK_STORAGE_DIR ||
+    (process.env.NODE_ENV === "production"
+      ? path.join(tmpdir(), "auto-payment-reminder")
+      : path.join(process.cwd(), "data"));
+
+  return path.join(storageRoot, "workbooks", getWorkbookDirectoryName(ownerId));
 }
 
 export function getStoredWorkbookPath(ownerId: string, kind: ImportKind) {
