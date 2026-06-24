@@ -45,25 +45,12 @@ export function resolveDispatchSettings(
       "",
     smsFromNumber,
     smsSenderId: settings?.smsSenderId || "",
-    whatsappProviderName: settings?.whatsappProviderName || "Twilio",
-    whatsappApiKey: settings?.whatsappApiKey || process.env.TWILIO_ACCOUNT_SID || "",
-    whatsappApiSecret: settings?.whatsappApiSecret || process.env.TWILIO_AUTH_TOKEN || "",
-    whatsappAccountSid:
-      settings?.whatsappAccountSid ||
-      settings?.whatsappApiKey ||
-      settings?.smsAccountSid ||
-      settings?.smsApiKey ||
-      process.env.TWILIO_ACCOUNT_SID ||
-      "",
-    whatsappAuthToken:
-      settings?.whatsappAuthToken ||
-      settings?.whatsappApiSecret ||
-      settings?.smsAuthToken ||
-      settings?.smsApiSecret ||
-      process.env.TWILIO_AUTH_TOKEN ||
-      "",
-    whatsappFromNumber:
-      settings?.whatsappFromNumber || process.env.TWILIO_WHATSAPP_FROM_NUMBER || "",
+    whatsappProviderName: settings?.whatsappProviderName || "Interakt",
+    whatsappApiKey: settings?.whatsappApiKey || process.env.INTERAKT_API_KEY || "",
+    whatsappApiSecret: settings?.whatsappApiSecret || "",
+    whatsappAccountSid: settings?.whatsappAccountSid || "",
+    whatsappAuthToken: settings?.whatsappAuthToken || "",
+    whatsappFromNumber: settings?.whatsappFromNumber || "",
     whatsappWebhookUrl: settings?.whatsappWebhookUrl || process.env.WHATSAPP_WEBHOOK_URL || "",
     futureIntegrationNotes: settings?.futureIntegrationNotes || "",
     reportRecipients: settings?.reportRecipients || [],

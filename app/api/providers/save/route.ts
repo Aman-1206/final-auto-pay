@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       smsAuthToken: String(formData.get("smsAuthToken") || "").trim(),
       smsFromNumber: String(formData.get("smsFromNumber") || "").trim(),
       smsSenderId: String(formData.get("smsSenderId") || "").trim(),
-      whatsappProviderName: String(formData.get("whatsappProviderName") || "Twilio").trim(),
+      whatsappProviderName: String(formData.get("whatsappProviderName") || "Interakt").trim(),
       whatsappApiKey: String(formData.get("whatsappApiKey") || "").trim(),
       whatsappApiSecret: String(formData.get("whatsappApiSecret") || "").trim(),
       whatsappAccountSid: String(formData.get("whatsappAccountSid") || "").trim(),

@@ -70,13 +70,17 @@ export default async function EmailConfigurationPage({
             <input name="smsAuthToken" type="password" defaultValue={settings.smsAuthToken} />
           </label>
           <label className="field">
-            <span>WhatsApp sender</span>
-            <input name="whatsappFromNumber" defaultValue={settings.whatsappFromNumber} />
+            <span>WhatsApp provider</span>
+            <input name="whatsappProviderName" defaultValue={settings.whatsappProviderName || "Interakt"} />
           </label>
           <label className="field">
             <span>WhatsApp webhook URL</span>
             <input name="whatsappWebhookUrl" type="url" defaultValue={settings.whatsappWebhookUrl} />
           </label>
+          <p className="dispatch-note dispatch-note-plain rule-span">
+            Interakt WhatsApp credentials are read from `INTERAKT_API_KEY`,
+            `INTERAKT_TEMPLATE_NAME`, and `INTERAKT_LANGUAGE_CODE`.
+          </p>
           <label className="field">
             <span>Report frequency</span>
             <select name="reportFrequency" defaultValue={settings.reportFrequency}>

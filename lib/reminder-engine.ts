@@ -28,6 +28,7 @@ import {
   getBillAgeDays,
   normalizeText
 } from "@/lib/utils";
+import { sendPaymentReminder } from "@/services/interaktService";
 
 type ReminderContext = {
   due: DueRecord;
@@ -244,7 +245,7 @@ function hasExistingLog(logs: ReminderLog[], dedupeKey: string, scheduledFor: st
   );
 }
 
-function normalizePhoneNumberForTwilio(value: string) {
+function normalizePhoneNumber(value: string) {
   const trimmed = value.trim().replace(/[\s()-]/g, "");
 
   if (isE164PhoneNumber(trimmed)) {
@@ -264,15 +265,6 @@ function normalizePhoneNumberForTwilio(value: string) {
   }
 
   return trimmed;
-}
-
-function normalizeWhatsappAddressForTwilio(value: string) {
-  const trimmed = value.trim();
-  const withoutPrefix = trimmed.toLowerCase().startsWith("whatsapp:")
-    ? trimmed.slice("whatsapp:".length)
-    : trimmed;
-
-  return `whatsapp:${normalizePhoneNumberForTwilio(withoutPrefix)}`;
 }
 
 function isValidEmailAddress(value: string) {
@@ -931,42 +923,16 @@ async function postWebhook(url: string, log: ReminderLog) {
   }
 }
 
-function resolveTwilioCredentials(
-  settings: DispatchSettings,
-  channel: "sms" | "whatsapp"
-) {
-  if (channel === "whatsapp") {
-    return {
-      accountSid:
-        settings.whatsappAccountSid ||
-        settings.whatsappApiKey ||
-        settings.smsAccountSid ||
-        settings.smsApiKey ||
-        process.env.TWILIO_ACCOUNT_SID ||
-        "",
-      authToken:
-        settings.whatsappAuthToken ||
-        settings.whatsappApiSecret ||
-        settings.smsAuthToken ||
-        settings.smsApiSecret ||
-        process.env.TWILIO_AUTH_TOKEN ||
-        ""
-    };
-  }
-
+function resolveTwilioSmsCredentials(settings: DispatchSettings) {
   return {
     accountSid:
       settings.smsAccountSid ||
       settings.smsApiKey ||
-      settings.whatsappAccountSid ||
-      settings.whatsappApiKey ||
       process.env.TWILIO_ACCOUNT_SID ||
       "",
     authToken:
       settings.smsAuthToken ||
       settings.smsApiSecret ||
-      settings.whatsappAuthToken ||
-      settings.whatsappApiSecret ||
       process.env.TWILIO_AUTH_TOKEN ||
       ""
   };
@@ -977,10 +943,9 @@ async function sendTwilioMessage(
   to: string,
   body: string,
   channelLabel: string,
-  settings: DispatchSettings,
-  channel: "sms" | "whatsapp"
+  settings: DispatchSettings
 ) {
-  const { accountSid, authToken } = resolveTwilioCredentials(settings, channel);
+  const { accountSid, authToken } = resolveTwilioSmsCredentials(settings);
 
   if (!accountSid) {
     throw new Error("Twilio Account SID is missing.");
@@ -1034,27 +999,24 @@ async function sendTwilioSms(log: ReminderLog, settings: DispatchSettings) {
   }
 
   await sendTwilioMessage(
-    normalizePhoneNumberForTwilio(settings.smsFromNumber),
-    normalizePhoneNumberForTwilio(log.recipient),
+    normalizePhoneNumber(settings.smsFromNumber),
+    normalizePhoneNumber(log.recipient),
     log.content,
     "SMS",
-    settings,
-    "sms"
+    settings
   );
 }
 
-async function sendTwilioWhatsapp(log: ReminderLog, settings: DispatchSettings) {
-  if (!settings.whatsappFromNumber) {
-    throw new Error("Twilio WhatsApp sender is missing.");
+async function sendInteraktWhatsapp(log: ReminderLog, due?: DueRecord) {
+  if (!due) {
+    throw new Error("WhatsApp reminder requires an invoice record.");
   }
 
-  await sendTwilioMessage(
-    normalizeWhatsappAddressForTwilio(settings.whatsappFromNumber),
-    normalizeWhatsappAddressForTwilio(log.recipient),
-    log.content,
-    "WhatsApp",
-    settings,
-    "whatsapp"
+  await sendPaymentReminder(
+    log.recipient,
+    due.matchedContactName || due.companyName || log.dealerCode || "Customer",
+    formatCurrency(due.amount, due.currency),
+    due.dueDate ? formatDate(due.dueDate) : "Not available"
   );
 }
 
@@ -1082,17 +1044,8 @@ async function deliverReminder(
     return "sent" as const;
   }
 
-  if (settings.whatsappFromNumber) {
-    await sendTwilioWhatsapp(log, settings);
-    return "sent" as const;
-  }
-
-  if (settings.whatsappWebhookUrl) {
-    await postWebhook(settings.whatsappWebhookUrl, log);
-    return "sent" as const;
-  }
-
-  throw new Error("Twilio WhatsApp sender is missing.");
+  await sendInteraktWhatsapp(log, due);
+  return "sent" as const;
 }
 
 export async function sendPendingReminders(ownerId: string, ruleIds?: string[], logIds?: string[]) {

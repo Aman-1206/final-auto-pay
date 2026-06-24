@@ -97,7 +97,7 @@ export function createDefaultRuleSet(ownerId: string) {
     senderMobileNumber: "",
     smsProviderName: "Twilio",
     smsSenderId: "",
-    whatsappProviderName: "Twilio",
+    whatsappProviderName: "Interakt",
     futureIntegrationNotes: "",
     reportRecipients: [],
     reportFrequency: "daily",

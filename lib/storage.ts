@@ -224,7 +224,7 @@ function normalizeDatabase(input: Partial<AppDatabase> | null | undefined): AppD
           smsAuthToken: toStringValue(settings?.smsAuthToken),
           smsFromNumber: toStringValue(settings?.smsFromNumber),
           smsSenderId: toStringValue(settings?.smsSenderId),
-          whatsappProviderName: toStringValue(settings?.whatsappProviderName) || "Twilio",
+          whatsappProviderName: toStringValue(settings?.whatsappProviderName) || "Interakt",
           whatsappApiKey: toStringValue(settings?.whatsappApiKey),
           whatsappApiSecret: toStringValue(settings?.whatsappApiSecret),
           whatsappAccountSid: toStringValue(settings?.whatsappAccountSid),

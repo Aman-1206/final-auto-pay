@@ -63,10 +63,10 @@ export default async function DispatchPage({
 
         <article className="dispatch-hero">
           <div className="dispatch-hero-copy">
-            <span className="dispatch-kicker">Twilio dispatch</span>
+            <span className="dispatch-kicker">Multi-channel dispatch</span>
             <h2>One quiet place to control email, SMS, and WhatsApp sends.</h2>
             <p>
-              Add your SMTP details plus Twilio sender numbers, generate the queue, and send live
+              Add your SMTP details and provider credentials, generate the queue, and send live
               reminders from the same panel.
             </p>
           </div>
@@ -109,7 +109,7 @@ export default async function DispatchPage({
                 SMS sender: {settings.smsFromNumber || "Not configured"}
               </p>
               <p className="muted-copy">
-                WhatsApp sender: {settings.whatsappFromNumber || "Not configured"}
+                WhatsApp provider: {settings.whatsappProviderName || "Interakt"}
               </p>
 
               {isAdmin ? (
@@ -137,12 +137,30 @@ export default async function DispatchPage({
               <form action="/api/reminders/generate" method="post" className="dispatch-form">
                 <GenerationDateField />
                 <TodayGenerationNotice count={todayGeneratedLogs.length} />
+                <label className="field">
+                  <span>Dispatch password</span>
+                  <input
+                    name="operationPassword"
+                    type="password"
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                  />
+                </label>
                 <button className="button" type="submit">
                   Generate eligible reminders
                 </button>
               </form>
 
               <form action="/api/reminders/send" method="post" className="dispatch-form">
+                <label className="field">
+                  <span>Dispatch password</span>
+                  <input
+                    name="operationPassword"
+                    type="password"
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                  />
+                </label>
                 <button className="button button-secondary" type="submit">
                   Send generated reminders
                 </button>
@@ -196,6 +214,16 @@ export default async function DispatchPage({
                       </option>
                     ))}
                   </select>
+                </label>
+
+                <label className="field">
+                  <span>Dispatch password</span>
+                  <input
+                    name="operationPassword"
+                    type="password"
+                    minLength={8}
+                    placeholder="At least 8 characters"
+                  />
                 </label>
               </div>
 
