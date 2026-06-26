@@ -50,7 +50,7 @@ function buildInteraktError(error) {
   return error.message || "Interakt WhatsApp request failed.";
 }
 
-export async function sendPaymentReminder(phoneNumber, customerName, amount, dueDate) {
+export async function sendPaymentReminder(phoneNumber, bodyValues, mediaUrl, fileName) {
   const apiKey = (process.env.INTERAKT_API_KEY || "").trim();
   const templateName = (process.env.INTERAKT_TEMPLATE_NAME || "payment_reminder").trim();
   const languageCode = (process.env.INTERAKT_LANGUAGE_CODE || "en").trim();
@@ -64,19 +64,26 @@ export async function sendPaymentReminder(phoneNumber, customerName, amount, due
     throw new Error("WhatsApp recipient phone number is missing.");
   }
 
+  const payload = {
+    countryCode: "+91",
+    phoneNumber: normalizedPhoneNumber,
+    type: "Template",
+    template: {
+      name: templateName,
+      languageCode,
+      bodyValues: Array.isArray(bodyValues) ? bodyValues : []
+    }
+  };
+
+  if (mediaUrl) {
+    payload.template.headerValues = [mediaUrl];
+    payload.template.fileName = fileName || "outstanding-statement.pdf";
+  }
+
   try {
     const response = await axios.post(
       INTERAKT_MESSAGE_URL,
-      {
-        countryCode: "+91",
-        phoneNumber: normalizedPhoneNumber,
-        type: "Template",
-        template: {
-          name: templateName,
-          languageCode,
-          bodyValues: [customerName, amount, dueDate]
-        }
-      },
+      payload,
       {
         headers: {
           Authorization: `Basic ${apiKey}`,
