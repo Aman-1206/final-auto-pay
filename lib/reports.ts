@@ -5,8 +5,8 @@ import {
 } from "@/lib/company-workspace";
 import { resolveDispatchSettings } from "@/lib/dispatch-settings";
 import { readDatabase } from "@/lib/storage";
-import type { AppDatabase, DispatchSettings, DueRecord, ReminderLog, User } from "@/lib/types";
-import { daysBetween, formatCurrency, formatDate } from "@/lib/utils";
+import type { AppDatabase, DispatchSettings, DueRecord, ReminderLog, User, ReminderRule } from "@/lib/types";
+import { daysBetween, formatCurrency, formatDate, getBillAgeDays } from "@/lib/utils";
 
 type ReportUser = Pick<User, "id" | "companyName" | "name" | "email" | "role">;
 
@@ -65,6 +65,9 @@ async function sendReportEmail(
     host: settings.smtpHost,
     port: settings.smtpPort,
     secure: settings.smtpSecure,
+    connectionTimeout: 10000, // 10 seconds
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
     auth: settings.smtpUser
       ? {
           user: settings.smtpUser,
@@ -363,74 +366,203 @@ export async function sendDailyActivityReport(user: ReportUser, reportDate = new
   return { ...result, report };
 }
 
-export function buildSalespersonSummaryText(name: string, dues: DueRecord[], sentLogs: ReminderLog[]) {
-  const dealers = groupBy(dues, (entry) => entry.companyName || entry.dealerCode);
+export function buildSalespersonSummaryText(name: string, dues: DueRecord[], sentLogs: ReminderLog[], rules?: ReminderRule[]) {
   const contactedDealers = new Set(
     sentLogs.map((entry) => entry.dealerCode).filter(Boolean)
   );
   const outstanding = dues.reduce((sum, entry) => sum + entry.amount, 0);
+  const currency = dues[0]?.currency || "INR";
+  const today = new Date();
+
+  // Get active trigger days from reminder rules (enabled only) sorted descending
+  const activeTriggerDays = (rules || [])
+    .filter((r) => r.enabled)
+    .map((r) => r.triggerDay)
+    .filter((day) => typeof day === "number")
+    .sort((a, b) => b - a);
+
+  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [90, 85, 80, 75, 60, 45, 30];
+
+  const brackets: Array<{ name: string; min: number; max: number; records: DueRecord[] }> = [];
+  for (let i = 0; i < finalDays.length; i++) {
+    const day = finalDays[i];
+    if (i === 0) {
+      brackets.push({
+        name: `More than ${day} Days Outstanding`,
+        min: day,
+        max: Infinity,
+        records: []
+      });
+    } else {
+      const prevDay = finalDays[i - 1];
+      brackets.push({
+        name: `${day} - ${prevDay - 1} Days Outstanding`,
+        min: day,
+        max: prevDay - 1,
+        records: []
+      });
+    }
+  }
+
+  // Add a trailing bracket for items newer than the lowest trigger day
+  const lowestDay = finalDays[finalDays.length - 1];
+  brackets.push({
+    name: `Less than ${lowestDay} Days Outstanding`,
+    min: -Infinity,
+    max: lowestDay - 1,
+    records: []
+  });
+
+  dues.forEach((due) => {
+    const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
+    const bracket = brackets.find((b) => age >= b.min && age <= b.max);
+    if (bracket) {
+      bracket.records.push(due);
+    } else {
+      brackets[brackets.length - 1].records.push(due);
+    }
+  });
+
+  const sectionsText = brackets.map((bracket) => {
+    if (bracket.records.length === 0) {
+      return "";
+    }
+    const sortedRecords = [...bracket.records].sort((a, b) => {
+      const ageA = getBillAgeDays(a.billDate || a.invoiceDate, today) || 0;
+      const ageB = getBillAgeDays(b.billDate || b.invoiceDate, today) || 0;
+      return ageB - ageA;
+    });
+
+    const lines = sortedRecords.map((due) => {
+      const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
+      return ` - Dealer: ${due.companyName || due.dealerCode} | Invoice: ${due.invoiceNumber || due.reference || "-"} | Date: ${due.billDate ? formatDate(due.billDate) : (due.invoiceDate ? formatDate(due.invoiceDate) : "-")} | Age: ${age} days | Outstanding: ${formatCurrency(due.amount, due.currency || currency)}`;
+    }).join("\n");
+
+    return `\n[${bracket.name} (${bracket.records.length} invoices)]\n${lines}`;
+  }).filter(Boolean).join("\n");
 
   return [
     `Salesperson: ${name}`,
     "",
     "Action required: Dealers assigned to you have invoices with due dates coming up or already pending. Please contact each dealer, remind them about the pending invoices, and ask them to arrange payment.",
     "",
-    `Assigned Dealers: ${dealers.size}`,
+    `Assigned Invoices: ${dues.length}`,
     `Reminders Sent Today: ${sentLogs.length}`,
-    `Pending Dealers: ${Math.max(0, dealers.size - contactedDealers.size)}`,
-    `Total Outstanding: ${formatCurrency(outstanding, dues[0]?.currency || "INR")}`,
+    `Total Outstanding: ${formatCurrency(outstanding, currency)}`,
     "",
-    "Dealer Breakdown:",
-    ...Array.from(dealers.entries()).map(([dealer, records]) => {
-      const amount = records.reduce((sum, entry) => sum + entry.amount, 0);
-      const nextDue = records
-        .map((entry) => entry.dueDate)
-        .filter(Boolean)
-        .sort()[0];
-      const invoices = records
-        .map((entry) => entry.invoiceNumber || entry.reference)
-        .filter(Boolean)
-        .join(", ");
-      return [
-        dealer,
-        `Due date: ${nextDue ? formatDate(nextDue) : "Not available"}`,
-        `Invoices: ${invoices || "N/A"}`,
-        `Outstanding: ${formatCurrency(amount, records[0]?.currency || "INR")}`,
-        "Action: Contact this dealer and ask them to clear the pending payment."
-      ].join("\n");
-    })
+    "Aging Categorized Breakdown:",
+    sectionsText
   ].join("\n");
 }
 
-export function buildSalespersonSummaryHtml(name: string, dues: DueRecord[], sentLogs: ReminderLog[]) {
-  const dealers = groupBy(dues, (entry) => entry.companyName || entry.dealerCode);
+export function buildSalespersonSummaryHtml(name: string, dues: DueRecord[], sentLogs: ReminderLog[], rules?: ReminderRule[]) {
   const contactedDealers = new Set(
     sentLogs.map((entry) => entry.dealerCode).filter(Boolean)
   );
   const outstanding = dues.reduce((sum, entry) => sum + entry.amount, 0);
   const currency = dues[0]?.currency || "INR";
-  const rows = Array.from(dealers.entries()).map(([dealer, records]) => {
-    const amount = records.reduce((sum, entry) => sum + entry.amount, 0);
-    const nextDue = records
-      .map((entry) => entry.dueDate)
-      .filter(Boolean)
-      .sort()[0];
-    const invoices = records
-      .map((entry) => entry.invoiceNumber || entry.reference)
-      .filter(Boolean)
-      .join(", ");
+  const today = new Date();
+
+  // Get active trigger days from reminder rules (enabled only) sorted descending
+  const activeTriggerDays = (rules || [])
+    .filter((r) => r.enabled)
+    .map((r) => r.triggerDay)
+    .filter((day) => typeof day === "number")
+    .sort((a, b) => b - a);
+
+  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [90, 85, 80, 75, 60, 45, 30];
+
+  const brackets: Array<{ name: string; min: number; max: number; records: DueRecord[] }> = [];
+  for (let i = 0; i < finalDays.length; i++) {
+    const day = finalDays[i];
+    if (i === 0) {
+      brackets.push({
+        name: `More than ${day} Days Outstanding`,
+        min: day,
+        max: Infinity,
+        records: []
+      });
+    } else {
+      const prevDay = finalDays[i - 1];
+      brackets.push({
+        name: `${day} - ${prevDay - 1} Days Outstanding`,
+        min: day,
+        max: prevDay - 1,
+        records: []
+      });
+    }
+  }
+
+  // Add a trailing bracket for items newer than the lowest trigger day
+  const lowestDay = finalDays[finalDays.length - 1];
+  brackets.push({
+    name: `Less than ${lowestDay} Days Outstanding`,
+    min: -Infinity,
+    max: lowestDay - 1,
+    records: []
+  });
+
+  dues.forEach((due) => {
+    const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
+    const bracket = brackets.find((b) => age >= b.min && age <= b.max);
+    if (bracket) {
+      bracket.records.push(due);
+    } else {
+      brackets[brackets.length - 1].records.push(due);
+    }
+  });
+
+  const sectionsHtml = brackets.map((bracket) => {
+    if (bracket.records.length === 0) {
+      return "";
+    }
+
+    const sortedRecords = [...bracket.records].sort((a, b) => {
+      const ageA = getBillAgeDays(a.billDate || a.invoiceDate, today) || 0;
+      const ageB = getBillAgeDays(b.billDate || b.invoiceDate, today) || 0;
+      return ageB - ageA; // oldest first
+    });
+
+    const rowsHtml = sortedRecords.map((due) => {
+      const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
+      return `
+        <tr>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;font-size:13px;">${escapeHtml(due.companyName || due.dealerCode)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(due.invoiceNumber || due.reference || "-")}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(due.billDate ? formatDate(due.billDate) : (due.invoiceDate ? formatDate(due.invoiceDate) : "-"))}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#b91c1c;font-weight:700;font-size:13px;">${escapeHtml(age)} days</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:700;text-align:right;font-size:13px;">${escapeHtml(formatCurrency(due.amount, due.currency || currency))}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#0f766e;font-size:13px;font-weight:600;">Contact dealer for payment</td>
+        </tr>
+      `;
+    }).join("");
 
     return `
-      <tr>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;">${escapeHtml(dealer)}</td>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;">${escapeHtml(records.length)}</td>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-weight:600;">${escapeHtml(nextDue ? formatDate(nextDue) : "Not available")}</td>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;">${escapeHtml(invoices || "-")}</td>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:700;text-align:right;">${escapeHtml(formatCurrency(amount, records[0]?.currency || currency))}</td>
-        <td style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#0f766e;font-weight:700;">Contact dealer for payment</td>
-      </tr>
+      <div style="margin-top:24px;">
+        <h3 style="font-size:13px;color:#0f766e;margin:0 0 10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;border-left:4px solid #0f766e;padding-left:8px;">
+          ${escapeHtml(bracket.name)} (${bracket.records.length} invoice${bracket.records.length === 1 ? "" : "s"})
+        </h3>
+        <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:18px;">
+          <thead>
+            <tr style="background:#f9fafb;">
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:30%;">Dealer</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Invoice No.</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Bill Date</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:12%;">Bill Age</th>
+              <th align="right" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:13%;">Outstanding</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
     `;
-  });
+  }).filter(Boolean).join("");
+
+  // Get total unique dealers
+  const uniqueDealers = new Set(dues.map((d) => d.companyName || d.dealerCode).filter(Boolean));
 
   return `
     <!doctype html>
@@ -453,25 +585,19 @@ export function buildSalespersonSummaryHtml(name: string, dues: DueRecord[], sen
 
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:22px;">
                 <tr>
-                  <td style="width:25%;padding:10px;">
+                  <td style="width:33.33%;padding:10px;">
                     <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
                       <div style="font-size:12px;color:#6b7280;">Assigned Dealers</div>
-                      <div style="font-size:24px;font-weight:700;margin-top:4px;">${escapeHtml(dealers.size)}</div>
+                      <div style="font-size:24px;font-weight:700;margin-top:4px;">${escapeHtml(uniqueDealers.size)}</div>
                     </div>
                   </td>
-                  <td style="width:25%;padding:10px;">
+                  <td style="width:33.33%;padding:10px;">
                     <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
                       <div style="font-size:12px;color:#6b7280;">Sent Today</div>
                       <div style="font-size:24px;font-weight:700;margin-top:4px;">${escapeHtml(sentLogs.length)}</div>
                     </div>
                   </td>
-                  <td style="width:25%;padding:10px;">
-                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
-                      <div style="font-size:12px;color:#6b7280;">Pending Dealers</div>
-                      <div style="font-size:24px;font-weight:700;margin-top:4px;">${escapeHtml(Math.max(0, dealers.size - contactedDealers.size))}</div>
-                    </div>
-                  </td>
-                  <td style="width:25%;padding:10px;">
+                  <td style="width:33.33%;padding:10px;">
                     <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
                       <div style="font-size:12px;color:#6b7280;">Outstanding</div>
                       <div style="font-size:20px;font-weight:700;margin-top:4px;">${escapeHtml(formatCurrency(outstanding, currency))}</div>
@@ -480,22 +606,8 @@ export function buildSalespersonSummaryHtml(name: string, dues: DueRecord[], sen
                 </tr>
               </table>
 
-              <h2 style="font-size:18px;margin:0 0 12px;">Dealer Breakdown</h2>
-              <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-                <thead>
-                  <tr style="background:#f9fafb;">
-                    <th align="left" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Dealer</th>
-                    <th align="left" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Invoices</th>
-                    <th align="left" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Due Date</th>
-                    <th align="left" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Invoice Nos.</th>
-                    <th align="right" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Outstanding</th>
-                    <th align="left" style="padding:12px 14px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:12px;text-transform:uppercase;">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${rows.join("") || `<tr><td colspan="6" style="padding:14px;color:#6b7280;">No assigned dues found.</td></tr>`}
-                </tbody>
-              </table>
+              <h2 style="font-size:18px;margin:24px 0 12px;color:#111827;font-weight:800;">Dealer Aging Breakdown</h2>
+              ${sectionsHtml || `<p style="color:#6b7280;font-size:14px;">No outstanding invoices found.</p>`}
             </div>
           </div>
         </div>
@@ -525,8 +637,8 @@ export async function sendSalespersonSummaries(user: ReportUser, sentLogs: Remin
       settings,
       [email],
       `Reminder Summary - ${name}`,
-      buildSalespersonSummaryText(name, records, salespersonLogs),
-      buildSalespersonSummaryHtml(name, records, salespersonLogs)
+      buildSalespersonSummaryText(name, records, salespersonLogs, database.reminderRules),
+      buildSalespersonSummaryHtml(name, records, salespersonLogs, database.reminderRules)
     );
     results.push({ email, ...result });
   }
