@@ -354,7 +354,7 @@ function buildBasicEmailHtml(content: string) {
   `;
 }
 
-function buildReminderEmailHtml(log: ReminderLog, due: DueRecord, allDuesForDealer: DueRecord[]) {
+function buildReminderEmailHtml(log: ReminderLog, due: DueRecord, allDuesForDealer: DueRecord[], database?: any) {
   const paymentSummary = buildPaymentSummary(due, allDuesForDealer);
   const currency = due.currency || "INR";
 
@@ -390,6 +390,58 @@ function buildReminderEmailHtml(log: ReminderLog, due: DueRecord, allDuesForDeal
     .map((paragraph) => `<p style="margin:0 0 14px;line-height:1.55;color:#374151;">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
     .join("");
 
+  // Dynamically calculate trigger day brackets
+  const rules = database?.reminderRules;
+  const activeTriggerDays: number[] = Array.from(
+    new Set<number>(
+      ((rules || []) as any[])
+        .filter((r: any) => r.enabled)
+        .map((r: any) => r.triggerDay as number)
+        .filter((day: any) => typeof day === "number")
+    )
+  ).sort((a, b) => a - b); // ascending
+
+  const sortedTriggerDays: number[] = activeTriggerDays.length > 0 ? activeTriggerDays : [30, 45, 60, 75, 80, 85, 90];
+
+  const currentRule = rules?.find((r: any) => r.id === log.ruleId);
+  // Use log.reminderDay (= rule.triggerDay stored at creation) as fallback — more reliable than billAgeDays
+  const currentRuleDay = currentRule ? currentRule.triggerDay : (log.reminderDay || log.billAgeDays || 30);
+
+  const currentIdx = sortedTriggerDays.indexOf(currentRuleDay);
+  const nextRuleDay = (currentIdx !== -1 && currentIdx < sortedTriggerDays.length - 1)
+    ? sortedTriggerDays[currentIdx + 1]
+    : 120; // default to 120 / 90+ if last
+
+  const today = referenceDate;
+  const getAmountForTriggerDay = (day: number) => {
+    const idx = sortedTriggerDays.indexOf(day);
+    if (idx === -1) {
+      return day === currentRuleDay ? due.amount : 0;
+    }
+    const minAge = idx === 0 ? -Infinity : sortedTriggerDays[idx - 1] + 1;
+    const maxAge = idx === sortedTriggerDays.length - 1 ? Infinity : day;
+
+    return allDuesForDealer
+      .filter((entry) => {
+        const age = getBillAgeDays(entry.billDate || entry.invoiceDate, today) || 0;
+        const nominalAge = age + 5; // engine offset: rule triggers 5 days before nominal day
+        return nominalAge >= minAge && nominalAge <= maxAge;
+      })
+      .reduce((sum, entry) => sum + (entry.amount || 0), 0);
+  };
+
+  const box2Amount = getAmountForTriggerDay(currentRuleDay);
+  const box3Amount = getAmountForTriggerDay(nextRuleDay);
+  const calculatedTotalOutstanding = box2Amount + box3Amount;
+
+  const isBox2Cd = currentRuleDay <= 60;
+  const box2Label = `Payment Due in ${currentRuleDay} Days${isBox2Cd ? " (for CD)" : ""}`;
+
+  const isBox3Cd = nextRuleDay <= 60;
+  const box3Label = nextRuleDay > 90
+    ? `Payment Due in 90+ Days`
+    : `Payment Due in ${nextRuleDay} Days${isBox3Cd ? " (for CD)" : ""}`;
+
   return `
     <!doctype html>
     <html>
@@ -403,19 +455,25 @@ function buildReminderEmailHtml(log: ReminderLog, due: DueRecord, allDuesForDeal
             </div>
             <div style="padding:22px 26px;">
 
-              <!-- Outstanding Summary: Total → Current -->
+              <!-- Outstanding Summary: Box 1 (Current Rule) → Box 2 (Next Rule) → Box 3 (Total Outstanding as sum of both) -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:0 -8px 18px;">
                 <tr>
-                  <td style="width:50%;padding:8px;">
-                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
-                      <div style="font-size:12px;color:#6b7280;font-weight:800;text-transform:uppercase;">Total Outstanding</div>
-                      <div style="font-size:22px;font-weight:800;margin-top:6px;color:#0f766e;">${escapeHtml(formatCurrency(paymentSummary.totalDue, currency))}</div>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;height:80px;">
+                      <div style="font-size:10px;color:#6b7280;font-weight:800;text-transform:uppercase;line-height:1.2;">${escapeHtml(box2Label)}</div>
+                      <div style="font-size:18px;font-weight:800;margin-top:6px;color:#111827;">${escapeHtml(formatCurrency(box2Amount, currency))}</div>
                     </div>
                   </td>
-                  <td style="width:50%;padding:8px;">
-                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;">
-                      <div style="font-size:12px;color:#6b7280;font-weight:800;text-transform:uppercase;">Current Outstanding</div>
-                      <div style="font-size:22px;font-weight:800;margin-top:6px;color:#111827;">${escapeHtml(formatCurrency(paymentSummary.currentInvoiceDue, currency))}</div>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;height:80px;">
+                      <div style="font-size:10px;color:#6b7280;font-weight:800;text-transform:uppercase;line-height:1.2;">${escapeHtml(box3Label)}</div>
+                      <div style="font-size:18px;font-weight:800;margin-top:6px;color:#b45309;">${escapeHtml(formatCurrency(box3Amount, currency))}</div>
+                    </div>
+                  </td>
+                  <td style="width:33.33%;padding:8px;">
+                    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;height:80px;">
+                      <div style="font-size:10px;color:#6b7280;font-weight:800;text-transform:uppercase;line-height:1.2;">Total Outstanding</div>
+                      <div style="font-size:18px;font-weight:800;margin-top:6px;color:#0f766e;">${escapeHtml(formatCurrency(calculatedTotalOutstanding, currency))}</div>
                     </div>
                   </td>
                 </tr>
@@ -890,7 +948,9 @@ async function sendEmail(
   log: ReminderLog,
   settings: DispatchSettings,
   due?: DueRecord,
-  allDuesForDealer: DueRecord[] = []
+  allDuesForDealer: DueRecord[] = [],
+  database?: any,
+  pdfBuffer?: Buffer
 ) {
   const transporter = nodemailer.createTransport({
     host: settings.smtpHost,
@@ -907,12 +967,20 @@ async function sendEmail(
       : undefined
   });
 
+  const attachments = pdfBuffer && due ? [
+    {
+      filename: `outstanding-statement-${due.dealerCode || due.customerCode || "statement"}.pdf`,
+      content: pdfBuffer
+    }
+  ] : undefined;
+
   await transporter.sendMail({
     from: settings.senderEmail || settings.smtpFrom,
     to: log.recipient,
     subject: log.subject,
     text: log.content,
-    html: due ? buildReminderEmailHtml(log, due, allDuesForDealer) : buildBasicEmailHtml(log.content)
+    html: due ? buildReminderEmailHtml(log, due, allDuesForDealer, database) : buildBasicEmailHtml(log.content),
+    attachments
   });
 }
 
@@ -1111,12 +1179,15 @@ async function sendInteraktWhatsapp(
     totalAmount,
     currency,
     pdfMessageBody,
-    log.dueId
+    log.dueId,
+    log.ruleId,
+    database
   );
 
   // 3. Upload to Google Drive and get shareable public direct download link
   const fileName = `outstanding-statement-${dealerCode}-${log.id}.pdf`;
   const mediaUrl = await uploadPdfToGoogleDrive(pdfBuffer, fileName);
+  log.pdfUrl = mediaUrl;
 
   // 4. Send WhatsApp with the PDF document
   const contactName = due.matchedContactName || due.companyName || log.dealerCode || "Customer";
@@ -1148,7 +1219,48 @@ async function deliverReminder(
       throw new Error("SMTP settings are incomplete.");
     }
 
-    await sendEmail(log, settings, due, allDuesForDealer);
+    let pdfBuffer: Buffer | undefined;
+    let pdfUrl: string | undefined;
+
+    if (due) {
+      const unsortedDues = allDuesForDealer.length > 0 ? allDuesForDealer : [due];
+      const dealerDues = [...unsortedDues].sort((a, b) => {
+        const dateA = a.billDate || a.invoiceDate || "";
+        const dateB = b.billDate || b.invoiceDate || "";
+        return dateA.localeCompare(dateB);
+      });
+      const totalAmount = dealerDues.reduce((sum, item) => sum + (item.amount || 0), 0);
+      const currency = due.currency || "INR";
+      const customerName = due.matchedContactName || due.companyName || log.dealerCode || "Customer";
+      const dealerCode = due.dealerCode || due.customerCode || log.dealerCode || "-";
+
+      let pdfMessageBody = log.content;
+      if (database) {
+        try {
+          pdfMessageBody = await getEmailContentForLog(log, due, dealerDues, database);
+        } catch (e) {
+          console.error("Failed to generate email content for PDF:", e);
+        }
+      }
+
+      pdfBuffer = await generateOutstandingPDF(
+        customerName,
+        dealerCode,
+        dealerDues,
+        totalAmount,
+        currency,
+        pdfMessageBody,
+        log.dueId,
+        log.ruleId,
+        database
+      );
+
+      const fileName = `outstanding-statement-${dealerCode}-${log.id}.pdf`;
+      pdfUrl = await uploadPdfToGoogleDrive(pdfBuffer, fileName);
+      log.pdfUrl = pdfUrl;
+    }
+
+    await sendEmail(log, settings, due, allDuesForDealer, database, pdfBuffer);
     return "sent" as const;
   }
 

@@ -25,7 +25,9 @@ export function generateOutstandingPDF(
   totalAmount: number,
   currency: string,
   messageText?: string,
-  currentDueId?: string
+  currentDueId?: string,
+  ruleId?: string,
+  database?: any
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     try {
@@ -50,29 +52,21 @@ export function generateOutstandingPDF(
          .font("Helvetica-Bold")
          .text("OUTSTANDING STATEMENT", 50, 50);
 
-      doc.fontSize(10)
+      doc.fontSize(8)
          .font("Helvetica")
          .fillColor(secondaryColor)
-         .text(
-           `Generated on: ${new Intl.DateTimeFormat("en-IN", {
-             dateStyle: "long",
-             timeStyle: "short"
-           }).format(new Date())}`,
-           50,
-           75
-         );
+         .text(`Report Generated On: ${formatDate(new Date().toISOString())}`, 50, 75);
 
-      // Horizontal separator
+      // ── 2. Metadata Columns ────────────────────────────────────────────────
       doc.strokeColor(borderColor)
-         .lineWidth(1)
-         .moveTo(50, 95)
-         .lineTo(545, 95)
+         .lineWidth(0.5)
+         .moveTo(50, 100)
+         .lineTo(545, 100)
          .stroke();
 
-      // ── 2. Customer Details ────────────────────────────────────────────────
       doc.fillColor(primaryColor)
-         .fontSize(11)
          .font("Helvetica-Bold")
+         .fontSize(11)
          .text("CUSTOMER DETAILS", 50, 115);
 
       doc.font("Helvetica")
@@ -81,16 +75,68 @@ export function generateOutstandingPDF(
          .text(`Company Name : ${customerName}`, 50, 130)
          .text(`Dealer Code  : ${dealerCode}`, 50, 145);
 
-      // ── 3. Two Summary Boxes (Total & Current Outstanding) ──────────────────
-      const currentInvoiceDue = dues[0]?.amount || 0;
-      const previousDue = dues.slice(1).reduce((sum, item) => sum + (item.amount || 0), 0);
-      const totalOutstanding = currentInvoiceDue + previousDue;
+      // ── 3. Three Summary Boxes (Total → Current Rule → Next Rule) ───────────
+      const rules = database?.reminderRules;
+      const activeTriggerDays: number[] = Array.from(
+        new Set<number>(
+          ((rules || []) as any[])
+            .filter((r: any) => r.enabled)
+            .map((r: any) => r.triggerDay as number)
+            .filter((day: any) => typeof day === "number")
+        )
+      ).sort((a, b) => a - b); // ascending
 
-      const boxWidth = 237;
+      const sortedTriggerDays: number[] = activeTriggerDays.length > 0 ? activeTriggerDays : [30, 45, 60, 75, 80, 85, 90];
+
+      // Find current rule trigger day
+      const currentRule = rules?.find((r: any) => r.id === ruleId);
+      const matchedDue = currentDueId ? dues.find(d => d.id === currentDueId) : dues[0];
+      // Engine fires 5 days before nominal day: nominal rule day = billAge + 5
+      const rawBillAge = matchedDue ? (getBillAgeDays(matchedDue.billDate || matchedDue.invoiceDate, new Date()) || 0) : 0;
+      const defaultDay = rawBillAge > 0 ? rawBillAge + 5 : 30;
+      const currentRuleDay = currentRule ? currentRule.triggerDay : defaultDay;
+
+      const currentIdx = sortedTriggerDays.indexOf(currentRuleDay);
+      const nextRuleDay = (currentIdx !== -1 && currentIdx < sortedTriggerDays.length - 1)
+        ? sortedTriggerDays[currentIdx + 1]
+        : 120; // default/fallback
+
+      const today = new Date();
+      const getAmountForTriggerDay = (day: number) => {
+        const idx = sortedTriggerDays.indexOf(day);
+        if (idx === -1) {
+          return day === currentRuleDay && matchedDue ? matchedDue.amount : 0;
+        }
+        const minAge = idx === 0 ? -Infinity : sortedTriggerDays[idx - 1] + 1;
+        const maxAge = idx === sortedTriggerDays.length - 1 ? Infinity : day;
+
+        return dues
+          .filter((entry) => {
+            const age = getBillAgeDays(entry.billDate || entry.invoiceDate, today) || 0;
+            const nominalAge = age + 5; // engine offset: rule triggers 5 days before nominal day
+            return nominalAge >= minAge && nominalAge <= maxAge;
+          })
+          .reduce((sum, entry) => sum + (entry.amount || 0), 0);
+      };
+
+      const box2Amount = getAmountForTriggerDay(currentRuleDay);
+      const box3Amount = getAmountForTriggerDay(nextRuleDay);
+
+      const isBox2Cd = currentRuleDay <= 60;
+      const box2Label = `PAYMENT DUE IN ${currentRuleDay} DAYS${isBox2Cd ? " (for CD)" : ""}`;
+
+      const isBox3Cd = nextRuleDay <= 60;
+      const box3Label = nextRuleDay > 90
+        ? `PAYMENT DUE IN 90+ DAYS`
+        : `PAYMENT DUE IN ${nextRuleDay} DAYS${isBox3Cd ? " (for CD)" : ""}`;
+
+      const calculatedTotalOutstanding = box2Amount + box3Amount;
+
+      const boxWidth = 155;
       const boxHeight = 50;
       const boxY = 165;
 
-      // Box 1: Total Outstanding
+      // Box 1: Payment Due in X Days
       doc.rect(50, boxY, boxWidth, boxHeight)
          .fillColor("#fafafa")
          .fill()
@@ -99,14 +145,14 @@ export function generateOutstandingPDF(
          .stroke();
       doc.fillColor(primaryColor)
          .font("Helvetica-Bold")
-         .fontSize(8)
-         .text("TOTAL OUTSTANDING", 65, boxY + 12);
-      doc.fontSize(12)
-         .fillColor("#0f766e") // Teal
-         .text(formatCurrencyForPdf(totalOutstanding, currency), 65, boxY + 26);
+         .fontSize(6.5)
+         .text(box2Label.toUpperCase(), 58, boxY + 12, { width: 140 });
+      doc.fontSize(11)
+         .fillColor(textColor)
+         .text(formatCurrencyForPdf(box2Amount, currency), 58, boxY + 26, { width: 140 });
 
-      // Box 2: Current Outstanding
-      doc.rect(308, boxY, boxWidth, boxHeight)
+      // Box 2: Payment Due in Y Days
+      doc.rect(220, boxY, boxWidth, boxHeight)
          .fillColor("#fafafa")
          .fill()
          .strokeColor(borderColor)
@@ -114,11 +160,26 @@ export function generateOutstandingPDF(
          .stroke();
       doc.fillColor(primaryColor)
          .font("Helvetica-Bold")
-         .fontSize(8)
-         .text("CURRENT OUTSTANDING", 323, boxY + 12);
-      doc.fontSize(12)
-         .fillColor(textColor)
-         .text(formatCurrencyForPdf(currentInvoiceDue, currency), 323, boxY + 26);
+         .fontSize(6.5)
+         .text(box3Label.toUpperCase(), 228, boxY + 12, { width: 140 });
+      doc.fontSize(11)
+         .fillColor("#b45309") // Amber/orange
+         .text(formatCurrencyForPdf(box3Amount, currency), 228, boxY + 26, { width: 140 });
+
+      // Box 3: Total Outstanding
+      doc.rect(390, boxY, boxWidth, boxHeight)
+         .fillColor("#fafafa")
+         .fill()
+         .strokeColor(borderColor)
+         .lineWidth(1)
+         .stroke();
+      doc.fillColor(primaryColor)
+         .font("Helvetica-Bold")
+         .fontSize(6.5)
+         .text("TOTAL OUTSTANDING", 398, boxY + 12, { width: 140 });
+      doc.fontSize(11)
+         .fillColor("#0f766e") // Teal
+         .text(formatCurrencyForPdf(calculatedTotalOutstanding, currency), 398, boxY + 26, { width: 140 });
 
       let currentY = 230;
 

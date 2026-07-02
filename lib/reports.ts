@@ -367,78 +367,72 @@ export async function sendDailyActivityReport(user: ReportUser, reportDate = new
 }
 
 export function buildSalespersonSummaryText(name: string, dues: DueRecord[], sentLogs: ReminderLog[], rules?: ReminderRule[]) {
-  const contactedDealers = new Set(
-    sentLogs.map((entry) => entry.dealerCode).filter(Boolean)
-  );
   const outstanding = dues.reduce((sum, entry) => sum + entry.amount, 0);
   const currency = dues[0]?.currency || "INR";
   const today = new Date();
 
-  // Get active trigger days from reminder rules (enabled only) sorted descending
-  const activeTriggerDays = (rules || [])
-    .filter((r) => r.enabled)
-    .map((r) => r.triggerDay)
-    .filter((day) => typeof day === "number")
-    .sort((a, b) => b - a);
+  // Get active trigger days from reminder rules (enabled only) and deduplicate
+  const activeTriggerDays = Array.from(
+    new Set(
+      (rules || [])
+        .filter((r) => r.enabled)
+        .map((r) => r.triggerDay)
+        .filter((day) => typeof day === "number")
+    )
+  ).sort((a, b) => a - b);
 
-  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [90, 85, 80, 75, 60, 45, 30];
-
-  const brackets: Array<{ name: string; min: number; max: number; records: DueRecord[] }> = [];
-  for (let i = 0; i < finalDays.length; i++) {
-    const day = finalDays[i];
-    if (i === 0) {
-      brackets.push({
-        name: `More than ${day} Days Outstanding`,
-        min: day,
-        max: Infinity,
-        records: []
-      });
-    } else {
-      const prevDay = finalDays[i - 1];
-      brackets.push({
-        name: `${day} - ${prevDay - 1} Days Outstanding`,
-        min: day,
-        max: prevDay - 1,
-        records: []
-      });
-    }
+  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [30, 45, 60, 75, 80, 85, 90];
+  if (!finalDays.includes(120)) {
+    finalDays.push(120);
   }
 
-  // Add a trailing bracket for items newer than the lowest trigger day
-  const lowestDay = finalDays[finalDays.length - 1];
-  brackets.push({
-    name: `Less than ${lowestDay} Days Outstanding`,
-    min: -Infinity,
-    max: lowestDay - 1,
-    records: []
-  });
+  const sectionsText = finalDays.map((D) => {
+    const matchingRules = (rules || []).filter(r => r.triggerDay === D);
+    const ruleIds = matchingRules.map(r => r.id);
+    const ruleLogs = sentLogs.filter(log => ruleIds.includes(log.ruleId) || log.reminderDay === D);
 
-  dues.forEach((due) => {
-    const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
-    const bracket = brackets.find((b) => age >= b.min && age <= b.max);
-    if (bracket) {
-      bracket.records.push(due);
-    } else {
-      brackets[brackets.length - 1].records.push(due);
-    }
-  });
-
-  const sectionsText = brackets.map((bracket) => {
-    if (bracket.records.length === 0) {
+    // Only show sections with activity today
+    if (ruleLogs.length === 0) {
       return "";
     }
-    const sortedRecords = [...bracket.records].sort((a, b) => {
-      const ageA = getBillAgeDays(a.billDate || a.invoiceDate, today) || 0;
-      const ageB = getBillAgeDays(b.billDate || b.invoiceDate, today) || 0;
-      return ageB - ageA;
-    });
 
-    const lines = sortedRecords.map((due) => {
-      const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
-      return ` - Dealer: ${due.companyName || due.dealerCode} | Invoice: ${due.invoiceNumber || due.reference || "-"} | Date: ${due.billDate ? formatDate(due.billDate) : (due.invoiceDate ? formatDate(due.invoiceDate) : "-")} | Age: ${age} days | Outstanding: ${formatCurrency(due.amount, due.currency || currency)}`;
+    const ruleDealerCodes = Array.from(new Set(ruleLogs.map(log => log.dealerCode).filter(Boolean)));
+    const assignedDealersCount = ruleDealerCodes.length;
+    const sentTodayCount = ruleLogs.length;
+    const matchingDueIds = ruleLogs.map(log => log.dueId).filter(Boolean);
+    const ruleDues = dues.filter(due => matchingDueIds.includes(due.id));
+    const paymentDueAmount = ruleDues.reduce((sum, d) => sum + (d.amount || 0), 0);
+
+    // Group ruleDues by dealer
+    const dealerMap = new Map<string, typeof ruleDues>();
+    for (const due of ruleDues) {
+      const key = due.companyName || due.dealerCode || "Unknown";
+      if (!dealerMap.has(key)) dealerMap.set(key, []);
+      dealerMap.get(key)!.push(due);
+    }
+
+    const lines = Array.from(dealerMap.entries()).map(([dealerName, groupDues]) => {
+      const dealerAllDuesCount = dues.filter(
+        (d) => (d.companyName || d.dealerCode) === dealerName
+      ).length;
+      const dueDates = groupDues.map(d => d.dueDate || "-").join(", ");
+      const invoiceNos = groupDues.map(d => d.invoiceNumber || d.reference || "-").join(", ");
+      const totalOutstanding = groupDues.reduce((sum, d) => sum + (d.amount || 0), 0);
+      const matchingLog = ruleLogs.find((l) => groupDues.some(gd => gd.id === l.dueId));
+      const pdfUrlStr = matchingLog?.pdfUrl ? ` | PDF: ${matchingLog.pdfUrl}` : "";
+      return ` - Dealer: ${dealerName} | Total Invoices: ${dealerAllDuesCount} | Due: ${dueDates} | Invoices: ${invoiceNos} | Outstanding: ${formatCurrency(totalOutstanding, currency)}${pdfUrlStr}`;
     }).join("\n");
 
-    return `\n[${bracket.name} (${bracket.records.length} invoices)]\n${lines}`;
+    const ruleLabel = D === 120 ? "120 Days or More" : `${D} Days`;
+
+    return [
+      `\n[Dealers in ${ruleLabel}]`,
+      ` * Assigned Dealers (sent ${D}d reminder today): ${assignedDealersCount}`,
+      ` * Payment Due in ${D} Days: ${formatCurrency(paymentDueAmount, currency)}`,
+      ` * Reminders Sent Today: ${sentTodayCount}`,
+      ` List of Dealers in ${ruleLabel}:`,
+      lines || "  No matching invoice records found."
+    ].join("\n");
   }).filter(Boolean).join("\n");
 
   return [
@@ -450,111 +444,131 @@ export function buildSalespersonSummaryText(name: string, dues: DueRecord[], sen
     `Reminders Sent Today: ${sentLogs.length}`,
     `Total Outstanding: ${formatCurrency(outstanding, currency)}`,
     "",
-    "Aging Categorized Breakdown:",
+    "Rule-by-Rule Aging Breakdown:",
     sectionsText
   ].join("\n");
 }
 
 export function buildSalespersonSummaryHtml(name: string, dues: DueRecord[], sentLogs: ReminderLog[], rules?: ReminderRule[]) {
-  const contactedDealers = new Set(
-    sentLogs.map((entry) => entry.dealerCode).filter(Boolean)
-  );
   const outstanding = dues.reduce((sum, entry) => sum + entry.amount, 0);
   const currency = dues[0]?.currency || "INR";
   const today = new Date();
 
-  // Get active trigger days from reminder rules (enabled only) sorted descending
-  const activeTriggerDays = (rules || [])
-    .filter((r) => r.enabled)
-    .map((r) => r.triggerDay)
-    .filter((day) => typeof day === "number")
-    .sort((a, b) => b - a);
+  // Get active trigger days from reminder rules (enabled only) and deduplicate
+  const activeTriggerDays = Array.from(
+    new Set(
+      (rules || [])
+        .filter((r) => r.enabled)
+        .map((r) => r.triggerDay)
+        .filter((day) => typeof day === "number")
+    )
+  ).sort((a, b) => a - b);
 
-  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [90, 85, 80, 75, 60, 45, 30];
-
-  const brackets: Array<{ name: string; min: number; max: number; records: DueRecord[] }> = [];
-  for (let i = 0; i < finalDays.length; i++) {
-    const day = finalDays[i];
-    if (i === 0) {
-      brackets.push({
-        name: `More than ${day} Days Outstanding`,
-        min: day,
-        max: Infinity,
-        records: []
-      });
-    } else {
-      const prevDay = finalDays[i - 1];
-      brackets.push({
-        name: `${day} - ${prevDay - 1} Days Outstanding`,
-        min: day,
-        max: prevDay - 1,
-        records: []
-      });
-    }
+  const finalDays = activeTriggerDays.length > 0 ? activeTriggerDays : [30, 45, 60, 75, 80, 85, 90];
+  if (!finalDays.includes(120)) {
+    finalDays.push(120);
   }
 
-  // Add a trailing bracket for items newer than the lowest trigger day
-  const lowestDay = finalDays[finalDays.length - 1];
-  brackets.push({
-    name: `Less than ${lowestDay} Days Outstanding`,
-    min: -Infinity,
-    max: lowestDay - 1,
-    records: []
-  });
+  const sectionsHtml = finalDays.map((D) => {
+    const matchingRules = (rules || []).filter(r => r.triggerDay === D);
+    const ruleIds = matchingRules.map(r => r.id);
+    const ruleLogs = sentLogs.filter(log => ruleIds.includes(log.ruleId) || log.reminderDay === D);
 
-  dues.forEach((due) => {
-    const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
-    const bracket = brackets.find((b) => age >= b.min && age <= b.max);
-    if (bracket) {
-      bracket.records.push(due);
-    } else {
-      brackets[brackets.length - 1].records.push(due);
-    }
-  });
-
-  const sectionsHtml = brackets.map((bracket) => {
-    if (bracket.records.length === 0) {
+    // Only show sections with activity today
+    if (ruleLogs.length === 0) {
       return "";
     }
 
-    const sortedRecords = [...bracket.records].sort((a, b) => {
-      const ageA = getBillAgeDays(a.billDate || a.invoiceDate, today) || 0;
-      const ageB = getBillAgeDays(b.billDate || b.invoiceDate, today) || 0;
-      return ageB - ageA; // oldest first
-    });
+    const ruleDealerCodes = Array.from(new Set(ruleLogs.map(log => log.dealerCode).filter(Boolean)));
+    const assignedDealersCount = ruleDealerCodes.length;
+    const sentTodayCount = ruleLogs.length;
+    const matchingDueIds = ruleLogs.map(log => log.dueId).filter(Boolean);
+    const ruleDues = dues.filter(due => matchingDueIds.includes(due.id));
+    const paymentDueAmount = ruleDues.reduce((sum, d) => sum + (d.amount || 0), 0);
 
-    const rowsHtml = sortedRecords.map((due) => {
-      const age = getBillAgeDays(due.billDate || due.invoiceDate, today) || 0;
+    // Group ruleDues by dealer for one-row-per-dealer breakdown
+    const dealerMap = new Map<string, typeof ruleDues>();
+    for (const due of ruleDues) {
+      const key = due.companyName || due.dealerCode || "Unknown";
+      if (!dealerMap.has(key)) dealerMap.set(key, []);
+      dealerMap.get(key)!.push(due);
+    }
+
+    const rowsHtml = Array.from(dealerMap.entries()).map(([dealerName, groupDues]) => {
+      const dealerAllDuesCount = dues.filter(
+        (d) => (d.companyName || d.dealerCode) === dealerName
+      ).length;
+      const dueDates = groupDues.map(d => d.dueDate ? formatDate(d.dueDate) : "-").join(", ");
+      const invoiceNos = groupDues.map(d => d.invoiceNumber || d.reference || "-").join(", ");
+      const totalOutstanding = groupDues.reduce((sum, d) => sum + (d.amount || 0), 0);
+      const matchingLog = ruleLogs.find((l) => groupDues.some(gd => gd.id === l.dueId));
+      const pdfLinkHtml = matchingLog?.pdfUrl
+        ? `<a href="${matchingLog.pdfUrl}" style="color:#0f766e;text-decoration:underline;font-weight:700;">PDF</a>`
+        : `N/A`;
+
       return `
         <tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;font-size:13px;">${escapeHtml(due.companyName || due.dealerCode)}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(due.invoiceNumber || due.reference || "-")}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(due.billDate ? formatDate(due.billDate) : (due.invoiceDate ? formatDate(due.invoiceDate) : "-"))}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#b91c1c;font-weight:700;font-size:13px;">${escapeHtml(age)} days</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:700;text-align:right;font-size:13px;">${escapeHtml(formatCurrency(due.amount, due.currency || currency))}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#0f766e;font-size:13px;font-weight:600;">Contact dealer for payment</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;font-size:13px;">${escapeHtml(dealerName)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;text-align:center;">${escapeHtml(dealerAllDuesCount)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(dueDates)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:13px;">${escapeHtml(invoiceNos)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:700;text-align:right;font-size:13px;">${escapeHtml(formatCurrency(totalOutstanding, currency))}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#0f766e;font-size:13px;font-weight:600;text-align:center;">${pdfLinkHtml}</td>
         </tr>
       `;
     }).join("");
 
+    const ruleLabel = D === 120 ? "120 Days or More" : `${D} Days`;
+
     return `
-      <div style="margin-top:24px;">
-        <h3 style="font-size:13px;color:#0f766e;margin:0 0 10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;border-left:4px solid #0f766e;padding-left:8px;">
-          ${escapeHtml(bracket.name)} (${bracket.records.length} invoice${bracket.records.length === 1 ? "" : "s"})
+      <div style="margin-top:32px; border-top: 1px dashed #cbd5e1; padding-top: 24px;">
+        <h3 style="font-size:16px;color:#0f766e;margin:0 0 16px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;border-left:4px solid #0f766e;padding-left:8px;">
+          Dealers in ${escapeHtml(ruleLabel)}
         </h3>
+
+        <!-- Rule specific boxes -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:18px;">
+          <tr>
+            <td style="width:33.33%;padding:5px;">
+              <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fafafa;height:68px;">
+                <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:800;line-height:1.2;">Assigned Dealers</div>
+                <div style="font-size:18px;font-weight:800;margin-top:4px;color:#111827;">${escapeHtml(assignedDealersCount)}</div>
+              </div>
+            </td>
+            <td style="width:33.33%;padding:5px;">
+              <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fafafa;height:68px;">
+                <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:800;line-height:1.2;">Payment Due in ${D} Days</div>
+                <div style="font-size:18px;font-weight:800;margin-top:4px;color:#0f766e;">${escapeHtml(formatCurrency(paymentDueAmount, currency))}</div>
+              </div>
+            </td>
+            <td style="width:33.33%;padding:5px;">
+              <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fafafa;height:68px;">
+                <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:800;line-height:1.2;">Reminder Sent Today</div>
+                <div style="font-size:18px;font-weight:800;margin-top:4px;color:#b45309;">${escapeHtml(sentTodayCount)}</div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- List Heading -->
+        <h4 style="font-size:13px;color:#374151;margin:18px 0 8px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;">
+          List of Dealers in ${escapeHtml(ruleLabel)}
+        </h4>
+
+        <!-- Dealer Table -->
         <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:18px;">
           <thead>
             <tr style="background:#f9fafb;">
-              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:30%;">Dealer</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:25%;">Dealer</th>
+              <th align="center" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">No. of Invoices</th>
+              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Due Date</th>
               <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Invoice No.</th>
-              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Bill Date</th>
-              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:12%;">Bill Age</th>
-              <th align="right" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:13%;">Outstanding</th>
-              <th align="left" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Action</th>
+              <th align="right" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Outstanding</th>
+              <th align="center" style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#374151;font-size:11px;text-transform:uppercase;font-weight:800;width:15%;">Action</th>
             </tr>
           </thead>
           <tbody>
-            ${rowsHtml}
+            ${rowsHtml || `<tr><td colspan="6" style="padding:12px;color:#6b7280;font-size:13px;text-align:center;">No invoices matching this rule bracket.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -628,19 +642,30 @@ export async function sendSalespersonSummaries(user: ReportUser, sentLogs: Remin
   const results: Array<{ email: string; skipped: boolean; recipientCount: number }> = [];
 
   for (const [email, records] of groups.entries()) {
-    const name = records[0]?.salespersonName || email;
-    const salespersonLogs = sentLogs.filter((log) =>
-      records.some((due) => due.id === log.dueId || due.dealerCode === log.dealerCode)
-    );
+    try {
+      const name = records[0]?.salespersonName || email;
+      const salespersonLogs = sentLogs.filter((log) =>
+        records.some((due) => due.id === log.dueId || due.dealerCode === log.dealerCode)
+      );
 
-    const result = await sendReportEmail(
-      settings,
-      [email],
-      `Reminder Summary - ${name}`,
-      buildSalespersonSummaryText(name, records, salespersonLogs, database.reminderRules),
-      buildSalespersonSummaryHtml(name, records, salespersonLogs, database.reminderRules)
-    );
-    results.push({ email, ...result });
+      // Skip if no reminders were sent today for this salesperson
+      if (salespersonLogs.length === 0) {
+        results.push({ email, skipped: true, recipientCount: 0 });
+        continue;
+      }
+
+      const result = await sendReportEmail(
+        settings,
+        [email],
+        `Reminder Summary - ${name}`,
+        buildSalespersonSummaryText(name, records, salespersonLogs, database.reminderRules),
+        buildSalespersonSummaryHtml(name, records, salespersonLogs, database.reminderRules)
+      );
+      results.push({ email, ...result });
+    } catch (err) {
+      console.error(`Failed to send salesperson summary to ${email}:`, err);
+      results.push({ email, skipped: true, recipientCount: 0 });
+    }
   }
 
   return results;
